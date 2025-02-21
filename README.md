@@ -9,7 +9,7 @@
 ## 修改基于
 - EDK2： edk2-stable202408.01（commit id = `4dfdca63a93497203f197ec98ba20e2327e4afe4`）
 - Ubuntu：ubuntu-20.04-server-cloudimg-amd64.img (sha256 = `8d73e811f51e1a82785f3fa26f10bdcc150fddf8d8c79d7417e645535d745ac0`)
-- Linux Kernel：linux-5.4.290（Ubuntu 20.04 LTS GA到HWE跨过这个版本）
+- Linux Kernel：linux-5.4.290（Ubuntu 20.04 LTS GA longterm内核）
 
 ## 文件结构
 ```
