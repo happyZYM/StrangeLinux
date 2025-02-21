@@ -1,0 +1,7 @@
+resources/
+build/
+playground/
+.cache/
+
+.clinerules
+/tools/config/edk2/.AutoGenIdFile.txt
