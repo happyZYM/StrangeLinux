@@ -36,3 +36,4 @@
 
 [Components]
   ZYMPkg/Application/HelloWorld/HelloWorld.inf
+  ZYMPkg/Application/HalloWord/HalloWord.inf
