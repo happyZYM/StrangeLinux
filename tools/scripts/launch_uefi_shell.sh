@@ -9,6 +9,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 OVMF_CODE="${PROJECT_ROOT}/edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd"
 OVMF_VARS="${PROJECT_ROOT}/edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd"
 SHELL_EFI="${PROJECT_ROOT}/edk2/Build/Shell/DEBUG_GCC5/X64/ShellPkg/Application/Shell/EA4BB293-2D7F-4456-A681-1F22F42CD0BC/DEBUG/Shell.efi"
+HELLO_WORLD_EFI="${PROJECT_ROOT}/edk2/Build/ZYMPkg/DEBUG_GCC5/X64/ZYMPkg/Application/HelloWorld/HelloWorld/DEBUG/HelloWorld.efi"
 
 if [ ! -f "$OVMF_CODE" ] || [ ! -f "$OVMF_VARS" ]; then
     echo "错误：OVMF固件不存在，请先编译EDK2"
@@ -17,6 +18,11 @@ fi
 
 if [ ! -f "$SHELL_EFI" ]; then
     echo "警告：Shell.efi 不存在，请确认编译路径是否正确"
+    exit 1
+fi
+
+if [ ! -f "$HELLO_WORLD_EFI" ]; then
+    echo "警告：HelloWorld.efi 不存在，请确认编译路径是否正确"
     exit 1
 fi
 
@@ -29,6 +35,7 @@ cp "$OVMF_VARS" "${PLAYGROUND_DIR}/OVMF_VARS.fd"
 
 mkdir -p "$PLAYGROUND_DIR/uefi"
 cp "$SHELL_EFI" "${PLAYGROUND_DIR}/uefi/Shell.efi"
+cp "$HELLO_WORLD_EFI" "${PLAYGROUND_DIR}/uefi/HelloWorld.efi"
 
 # 启动QEMU进入UEFI shell
 qemu-system-x86_64 \

@@ -1,0 +1,32 @@
+## @file
+#  A simple UEFI application that prints "Hello World!".
+#
+#  Copyright (c) 2025, Your Organization. All rights reserved.<BR>
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = HelloWorld
+  FILE_GUID                      = 6987936E-ED34-44db-AE97-1FA5E4ED2116
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = UefiMain
+
+#
+# The following information is for reference only and not required by the build tools.
+#
+#  VALID_ARCHITECTURES           = IA32 X64 ARM AARCH64 RISCV64
+#
+
+[Sources]
+  HelloWorld.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ZYMPkg/ZYMPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib

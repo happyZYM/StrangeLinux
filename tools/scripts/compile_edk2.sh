@@ -18,3 +18,6 @@ make -C BaseTools -j$(nproc)
 build
 
 build -p ShellPkg/ShellPkg.dsc
+
+# 编译我们的ZYMPkg
+build -p ZYMPkg/ZYMPkg.dsc
