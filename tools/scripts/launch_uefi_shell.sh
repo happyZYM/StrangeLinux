@@ -5,41 +5,42 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 获取项目根目录（假设脚本在 tools/scripts 目录下）
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# 检查OVMF固件文件是否存在
+# 定义资源文件路径
 OVMF_CODE="${PROJECT_ROOT}/edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd"
 OVMF_VARS="${PROJECT_ROOT}/edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd"
-SHELL_EFI="${PROJECT_ROOT}/edk2/Build/Shell/DEBUG_GCC5/X64/ShellPkg/Application/Shell/EA4BB293-2D7F-4456-A681-1F22F42CD0BC/DEBUG/Shell.efi"
+# SHELL_EFI="${PROJECT_ROOT}/edk2/Build/Shell/DEBUG_GCC5/X64/ShellPkg/Application/Shell/EA4BB293-2D7F-4456-A681-1F22F42CD0BC/DEBUG/Shell.efi"
 RAW_ACPIVIEW_EFI="${PROJECT_ROOT}/edk2/Build/Shell/DEBUG_GCC5/X64/ShellPkg/Application/AcpiViewApp/AcpiViewApp/DEBUG/AcpiViewApp.efi"
 HELLO_WORLD_EFI="${PROJECT_ROOT}/edk2/Build/ZYMPkg/DEBUG_GCC5/X64/ZYMPkg/Application/HelloWorld/HelloWorld/DEBUG/HelloWorld.efi"
 HALLO_WORD_EFI="${PROJECT_ROOT}/edk2/Build/ZYMPkg/DEBUG_GCC5/X64/ZYMPkg/Application/HalloWord/HalloWord/DEBUG/HalloWord.efi"
+MY_ACPIVIEW_EFI="${PROJECT_ROOT}/edk2/Build/ZYMPkg/DEBUG_GCC5/X64/ZYMPkg/Application/AcpiView/AcpiView/DEBUG/AcpiView.efi"
 
-if [ ! -f "$OVMF_CODE" ] || [ ! -f "$OVMF_VARS" ]; then
-    echo "错误：OVMF固件不存在，请先编译EDK2"
-    exit 1
-fi
+# 检查上述文件是否存在
+RESOURCE_LIST=("$OVMF_CODE" "$OVMF_VARS" "$RAW_ACPIVIEW_EFI" "$HELLO_WORLD_EFI" "$HALLO_WORD_EFI" "$MY_ACPIVIEW_EFI")
 
-if [ ! -f "$SHELL_EFI" ]; then
-    echo "警告：Shell.efi 不存在，请确认编译路径是否正确"
-    exit 1
-fi
-
-if [ ! -f "$HELLO_WORLD_EFI" ]; then
-    echo "警告：HelloWorld.efi 不存在，请确认编译路径是否正确"
-    exit 1
-fi
-
+for RESOURCE in "${RESOURCE_LIST[@]}"; do
+    echo "检查文件: $RESOURCE"
+    if [ ! -f "$RESOURCE" ]; then
+        echo "错误：$RESOURCE 不存在，请确认编译路径是否正确"
+        exit 1
+    fi
+done
 # 创建运行目录（如果不存在）
 PLAYGROUND_DIR="${PROJECT_ROOT}/playground"
+rm -rf "$PLAYGROUND_DIR"
 mkdir -p "$PLAYGROUND_DIR"
 
 # 复制OVMF变量文件（避免修改原始文件）
 cp "$OVMF_VARS" "${PLAYGROUND_DIR}/OVMF_VARS.fd"
 
 mkdir -p "$PLAYGROUND_DIR/uefi"
-cp "$SHELL_EFI" "${PLAYGROUND_DIR}/uefi/Origin_Shell.efi"
-cp "$RAW_ACPIVIEW_EFI" "${PLAYGROUND_DIR}/uefi/Origin_AcpiViewApp.efi"
+# cp "$SHELL_EFI" "${PLAYGROUND_DIR}/uefi/Origin_Shell.efi"
+cp "$RAW_ACPIVIEW_EFI" "${PLAYGROUND_DIR}/uefi/O_AcpiViewApp.efi"
+cp "$MY_ACPIVIEW_EFI" "${PLAYGROUND_DIR}/uefi/My_AcpiView.efi"
 cp "$HELLO_WORLD_EFI" "${PLAYGROUND_DIR}/uefi/HelloWorld.efi"
 cp "$HALLO_WORD_EFI" "${PLAYGROUND_DIR}/uefi/HalloWord.efi"
+
+# 暂停
+# read -p "按任意键继续..."
 
 # 启动QEMU进入UEFI shell
 qemu-system-x86_64 \

@@ -1,7 +1,10 @@
+.cursor/
+.vscode/
 resources/
 build/
 playground/
 .cache/
 
 .clinerules
+.cursorrules
 /tools/config/edk2/.AutoGenIdFile.txt
