@@ -1,10 +1,3 @@
-/** @file
-  ACPI Table Parser implementation.
-
-  Copyright (c) 2025, Your Organization. All rights reserved.<BR>
-  SPDX-License-Identifier: BSD-2-Clause-Patent
-**/
-
 #include <AcpiView/parser.h>
 
 VOID
