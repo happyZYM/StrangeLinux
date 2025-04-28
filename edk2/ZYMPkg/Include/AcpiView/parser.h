@@ -23,6 +23,24 @@
 #include <AcpiView/utils.h>
 #include <AcpiView/parserimpl.h>
 
+/**
+  宏：用于声明和解析ACPI表头部分
+  使用方法：DECLARE_AND_PARSE_ACPI_HEADER(table_ptr);
+  
+  @param[in]  TablePtr  指向ACPI表的指针
+**/
+#define DECLARE_AND_PARSE_ACPI_HEADER(TablePtr) \
+  UINT8 signature[4]; \
+  UINT32 length; \
+  UINT8 revision; \
+  UINT8 checksum; \
+  UINT8 oem_id[6]; \
+  UINT8 oem_table_id[8]; \
+  UINT32 oem_revision; \
+  UINT32 creator_id; \
+  UINT32 creator_revision; \
+  ParseHeader(TablePtr, signature, &length, &revision, &checksum, oem_id, oem_table_id, &oem_revision, &creator_id, &creator_revision)
+
 VOID
 EFIAPI
 ParseHeader(

@@ -52,25 +52,27 @@ EFIAPI
 RecursiveParse(
   IN VOID *table_ptr
 ) {
-  UINT8 signature[4];
-  UINT32 length;
-  UINT8 revision;
-  UINT8 checksum;
-  UINT8 oem_id[6];
-  UINT8 oem_table_id[8];
-  UINT32 oem_revision;
-  UINT32 creator_id;
-  UINT32 creator_revision;
-  ParseHeader(table_ptr, signature, &length, &revision, &checksum, oem_id, oem_table_id, &oem_revision, &creator_id, &creator_revision);
+  DECLARE_AND_PARSE_ACPI_HEADER(table_ptr);
+  Print(L"\n\n====================\n");
   Print(L"Signature: "); SafeStrPrint(signature, 4); Print(L"\n");
-  Print(L"Length: %d\n", length);
+  Print(L"Address: 0x%016lx\n", (UINTN)table_ptr);
+  Print(L"Length: %u\n", length);
   Print(L"Revision: %d\n", revision);
-  Print(L"Checksum: %d\n", checksum);
+  Print(L"Checksum: 0x%02x\n", checksum);
   Print(L"OEM ID: "); SafeStrPrint(oem_id, 6); Print(L"\n");
-  Print(L"OEM Table ID: "); SafeStrPrint(oem_table_id, 8); Print(L"\n");
-  Print(L"OEM Revision: %d\n", oem_revision);
-  Print(L"Creator ID: %d\n", creator_id);
-  Print(L"Creator Revision: %d\n", creator_revision);
+  UINT8 partial_checksum = 0;
+  UINTN idx;
+  for(idx = 0; idx < length; idx++) {
+    partial_checksum += ((UINT8 *)table_ptr)[idx];
+  }
+  if(partial_checksum != 0) {
+    Print(L"Checksum mismatch\n");
+    return EFI_INVALID_PARAMETER;
+  } else {
+    Print(L"Checksum verified\n");
+  }
+  Print(L"--------------------\n");
+
   ACPI_PARSER_FUNCTION parser = GetParser(signature);
   if(parser == NULL) {
     Print(L"No parser found for signature: "); SafeStrPrint(signature, 4); Print(L"\n");
@@ -90,6 +92,14 @@ GetParser(
     }
 
   PARSER_ENTRY(XSDT);
+  PARSER_ENTRY(FACP);
+  PARSER_ENTRY(FACS);
+  PARSER_ENTRY(DSDT);
+  PARSER_ENTRY(APIC);
+  PARSER_ENTRY(HPET);
+  PARSER_ENTRY(MCFG);
+  PARSER_ENTRY(WAET);
+  PARSER_ENTRY(BGRT);
 
   #undef PARSER_ENTRY
   
