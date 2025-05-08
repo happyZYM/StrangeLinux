@@ -11,6 +11,7 @@ CPU_CORES=4
 SSH_PORT=2222
 VNC_ENABLED=false
 DEBUG_MODE=false
+USE_DIRECT_KERNEL=true
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -35,6 +36,14 @@ while [[ $# -gt 0 ]]; do
       DEBUG_MODE=true
       shift
       ;;
+    --use-kernel)
+      USE_DIRECT_KERNEL=true
+      shift
+      ;;
+    --no-direct-kernel)
+      USE_DIRECT_KERNEL=false
+      shift
+      ;;
     --help)
       echo "用法: $0 [选项]"
       echo "选项:"
@@ -43,6 +52,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --ssh-port=PORT 设置SSH转发端口 (默认: 2222)"
       echo "  --vnc           启用VNC显示 (默认: 禁用)"
       echo "  --debug         启用调试模式"
+      echo "  --use-kernel    使用自定义内核直接引导 (默认: 启用)"
+      echo "  --no-direct-kernel 不使用直接内核引导 (使用镜像自带内核)"
       echo "  --help          显示此帮助信息"
       exit 0
       ;;
@@ -62,7 +73,10 @@ OVMF_CODE="${PROJECT_ROOT}/edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd"
 OVMF_VARS="${PROJECT_ROOT}/edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd"
 
 # 检查必要文件是否存在
-RESOURCE_LIST=("$SEED_IMG" "$UBUNTU_IMG" "$KERNEL_IMAGE" "$OVMF_CODE" "$OVMF_VARS")
+RESOURCE_LIST=("$SEED_IMG" "$UBUNTU_IMG" "$OVMF_CODE" "$OVMF_VARS")
+if [ "$USE_DIRECT_KERNEL" = true ]; then
+    RESOURCE_LIST+=("$KERNEL_IMAGE")
+fi
 
 for RESOURCE in "${RESOURCE_LIST[@]}"; do
     echo "检查文件: $RESOURCE"
@@ -111,23 +125,6 @@ QEMU_CMD="qemu-system-x86_64 \
     -drive if=pflash,format=raw,unit=0,file=\"${OVMF_CODE}\",readonly=on \
     -drive if=pflash,format=raw,unit=1,file=\"${PLAYGROUND_DIR}/OVMF_VARS.fd\""
 
-# 两种启动模式：1. 直接从UEFI启动 2. 使用内核直接启动
-USE_DIRECT_KERNEL=false
-
-if [ "$USE_DIRECT_KERNEL" = true ]; then
-    # 使用内核直接启动模式
-    QEMU_CMD+=" \
-    -kernel \"${KERNEL_IMAGE}\" \
-    -append \"root=/dev/sda1 console=ttyS0 earlyprintk=ttyS0 console=tty1"
-    
-    # 如果处于调试模式，增加调试参数
-    if [ "$DEBUG_MODE" = true ]; then
-        QEMU_CMD+=" debug loglevel=7"
-    fi
-    
-    QEMU_CMD+="\""
-fi
-
 # 添加磁盘驱动器
 QEMU_CMD+=" \
     -drive file=\"${PLAYGROUND_DIR}/ubuntu.qcow2\",format=qcow2,if=ide,index=0 \
@@ -136,6 +133,13 @@ QEMU_CMD+=" \
     -device virtio-net-pci,netdev=net0 \
     -fsdev local,id=fsdev0,path=\"${SHARED_DIR}\",security_model=none \
     -device virtio-9p-pci,fsdev=fsdev0,mount_tag=hostshare"
+
+# 如果启用直接内核引导，添加内核参数
+if [ "$USE_DIRECT_KERNEL" = true ]; then
+    QEMU_CMD+=" \
+    -kernel \"${KERNEL_IMAGE}\" \
+    -append \"root=/dev/sda1 console=ttyS0 earlyprintk=serial net.ifnames=0 biosdevname=0 rootwait\""
+fi
 
 # 如果启用VNC，添加VNC参数
 if [ "$VNC_ENABLED" = true ]; then
