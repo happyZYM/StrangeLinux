@@ -69,6 +69,7 @@ done
 SEED_IMG="${PROJECT_ROOT}/build/seed.img"
 UBUNTU_IMG="${PROJECT_ROOT}/resources/static/ubuntu-20.04-server-cloudimg-amd64.img"
 KERNEL_IMAGE="${PROJECT_ROOT}/build/kernel/arch/x86/boot/bzImage"
+INITRD_IMAGE="${PROJECT_ROOT}/playground/shared/initrd.img-5.4.0-205-generic"
 OVMF_CODE="${PROJECT_ROOT}/edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd"
 OVMF_VARS="${PROJECT_ROOT}/edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd"
 
@@ -138,6 +139,7 @@ QEMU_CMD+=" \
 if [ "$USE_DIRECT_KERNEL" = true ]; then
     QEMU_CMD+=" \
     -kernel \"${KERNEL_IMAGE}\" \
+    -initrd \"${INITRD_IMAGE}\" \
     -append \"root=/dev/sda1 console=ttyS0 earlyprintk=serial net.ifnames=0 biosdevname=0 rootwait\""
 fi
 

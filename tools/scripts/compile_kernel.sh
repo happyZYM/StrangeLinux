@@ -11,7 +11,6 @@ mkdir -p "${PROJECT_ROOT}/build/kernel"
 # 使用Docker容器进行编译，使用当前用户的UID和GID
 docker run --rm \
     -v "${PROJECT_ROOT}:/workspace" \
-    -u $(id -u):$(id -g) \
     strangelinux-builder \
     bash -c "cd /workspace/linux-5.4.290 && \
     make KCONFIG_CONFIG=../tools/config/kernel/.config O=../build/kernel -j$(nproc)"
