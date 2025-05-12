@@ -7,7 +7,7 @@ import trio
 import time
 import logging
 import asyncio
-from pyfuse3 import FUSEError
+from pyfuse3 import FUSEError, invalidate_entry, invalidate_inode
 from openai import AsyncOpenAI
 from collections import defaultdict
 
@@ -197,7 +197,9 @@ class GPTfs(pyfuse3.Operations):
         open_flags = flags
         self.open_files[inode] = {
             'flags': open_flags,
-            'truncated': False
+            'truncated': False,
+            'direct_io': False,  # 默认不使用直接IO
+            'keep_cache': False  # 默认不保持缓存
         }
         
         # 检查是否需要截断文件
@@ -209,6 +211,13 @@ class GPTfs(pyfuse3.Operations):
             self.open_files[inode]['truncated'] = True
         
         logger.debug(f"open: 打开文件 {inode}，标志: {flags}")
+        
+        # 对于output文件，使用直接IO以避免缓存问题
+        if self._is_output_file(inode):
+            logger.debug(f"open: 文件 {inode} 是output文件，使用直接IO")
+            self.open_files[inode]['direct_io'] = True
+            return pyfuse3.FileInfo(fh=inode, direct_io=True)
+        
         return pyfuse3.FileInfo(fh=inode)
 
     async def release(self, fh):
@@ -279,12 +288,28 @@ class GPTfs(pyfuse3.Operations):
                 return True
         return False
     
+    def _is_output_file(self, inode):
+        """判断是否是output文件"""
+        # 遍历目录查找output文件
+        for dir_inode, entries in self.directories.items():
+            if 'output' in entries and entries['output'] == inode:
+                return True
+        return False
+    
     def _find_session_inode(self, input_inode):
         """根据input文件的inode找到对应的session目录inode"""
         for session_inode, entries in self.directories.items():
             if 'input' in entries and entries['input'] == input_inode:
                 return session_inode
         return None
+    
+    async def _invalidate_cache(self, inode):
+        """使指定inode的缓存失效"""
+        try:
+            logger.debug(f"_invalidate_cache: 使节点 {inode} 的缓存失效")
+            await pyfuse3.invalidate_inode(inode)
+        except Exception as e:
+            logger.error(f"_invalidate_cache: 使缓存失效失败: {e}", exc_info=True)
 
     async def _process_gpt_request(self, session_inode):
         """处理GPT请求"""
@@ -324,7 +349,18 @@ class GPTfs(pyfuse3.Operations):
                 self.nodes[error_inode][1].st_size = 0
                 self.nodes[error_inode][1].st_mtime_ns = int(time.time() * 1e9)
                 
-                logger.info(f"GPT请求处理成功")
+                # 使缓存失效，确保能立即读取到新内容
+                await self._invalidate_cache(output_inode)
+                await self._invalidate_cache(error_inode)
+                
+                # 查找会话目录名称，用于日志记录
+                session_name = "未知会话"
+                for name, inode in self.directories[pyfuse3.ROOT_INODE].items():
+                    if inode == session_inode:
+                        session_name = name
+                        break
+                
+                logger.info(f"GPT请求处理成功，会话: {session_name}")
                 
             except Exception as e:
                 # 写入error文件
@@ -333,6 +369,9 @@ class GPTfs(pyfuse3.Operations):
                 self.data[error_inode] = error_msg.encode('utf-8')
                 self.nodes[error_inode][1].st_size = len(self.data[error_inode])
                 self.nodes[error_inode][1].st_mtime_ns = int(time.time() * 1e9)
+                
+                # 使error文件的缓存失效
+                await self._invalidate_cache(error_inode)
         except Exception as e:
             logger.error(f"_process_gpt_request: 处理过程中发生未捕获的异常: {e}", exc_info=True)
 
