@@ -11,19 +11,17 @@ from pyfuse3 import FUSEError, invalidate_entry, invalidate_inode
 from openai import AsyncOpenAI
 from collections import defaultdict
 
-# 配置日志
-logging.basicConfig(level=logging.DEBUG)  # 提高日志级别以获取更多信息
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# 初始化OpenAI客户端
 client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
     base_url=os.getenv("OPENAI_BASE_URL"),
 )
 
-model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo")
+model_name = os.getenv("OPENAI_MODEL_NAME", "llama-3.3-70b-versatile")
 
-# 定义文件系统中的节点类型
+# define node type
 class NodeType:
     DIR = 0
     FILE = 1
@@ -31,21 +29,21 @@ class NodeType:
 class GPTfs(pyfuse3.Operations):
     def __init__(self):
         super().__init__()
-        # 最后一个已分配的inode
+        # last allocated inode
         self.next_inode = pyfuse3.ROOT_INODE + 1
-        # 存储节点数据
+        # store node data
         self.nodes = {}
-        # 存储文件内容
+        # store file content
         self.data = defaultdict(bytes)
-        # 存储目录项
+        # store directory items
         self.directories = defaultdict(dict)
-        # 跟踪文件打开状态和标志
+        # track file open status and flags
         self.open_files = {}
-        # 创建根目录
+        # create root directory
         self.create_root()
 
     def create_root(self):
-        """创建根目录"""
+        """create root directory"""
         now = time.time()
         root = pyfuse3.EntryAttributes()
         root.st_ino = pyfuse3.ROOT_INODE
@@ -62,108 +60,108 @@ class GPTfs(pyfuse3.Operations):
         self.directories[pyfuse3.ROOT_INODE] = {}
 
     async def getattr(self, inode, ctx=None):
-        """获取节点属性"""
+        """get node attributes"""
         if inode not in self.nodes:
-            logger.debug(f"getattr: 节点 {inode} 不存在")
+            logger.debug(f"getattr: node {inode} does not exist")
             raise FUSEError(errno.ENOENT)
         
         _, attrs = self.nodes[inode]
-        logger.debug(f"getattr: 返回节点 {inode} 的属性")
+        logger.debug(f"getattr: return node {inode} attributes")
         return attrs
 
     async def lookup(self, parent_inode, name, ctx=None):
-        """查找目录项"""
+        """lookup directory item"""
         if parent_inode not in self.directories:
-            logger.debug(f"lookup: 父节点 {parent_inode} 不存在")
+            logger.debug(f"lookup: parent node {parent_inode} does not exist")
             raise FUSEError(errno.ENOENT)
         
-        name_str = os.fsdecode(name)  # 将bytes转换为str
-        logger.debug(f"lookup: 在 {parent_inode} 中查找 {name_str}")
+        name_str = os.fsdecode(name)  # convert bytes to str
+        logger.debug(f"lookup: lookup {name_str} in {parent_inode}")
         
         if name_str not in self.directories[parent_inode]:
-            logger.debug(f"lookup: 在 {parent_inode} 中未找到 {name_str}")
+            logger.debug(f"lookup: {name_str} not found in {parent_inode}")
             raise FUSEError(errno.ENOENT)
         
         inode = self.directories[parent_inode][name_str]
         _, attrs = self.nodes[inode]
         
-        logger.debug(f"lookup: 在 {parent_inode} 中找到 {name_str}，inode={inode}")
+        logger.debug(f"lookup: found {name_str} in {parent_inode}, inode={inode}")
         return attrs
 
     async def opendir(self, inode, ctx):
-        """打开目录"""
+        """open directory"""
         if inode not in self.nodes or self.nodes[inode][0] != NodeType.DIR:
-            logger.debug(f"opendir: {inode} 不是目录")
+            logger.debug(f"opendir: {inode} is not a directory")
             raise FUSEError(errno.ENOTDIR)
         
-        logger.debug(f"opendir: 打开目录 {inode}")
+        logger.debug(f"opendir: open directory {inode}")
         return inode
 
     async def readdir(self, inode, off, token):
-        """读取目录内容"""
+        """read directory content"""
         if inode not in self.nodes or self.nodes[inode][0] != NodeType.DIR:
-            logger.debug(f"readdir: {inode} 不是目录")
+            logger.debug(f"readdir: {inode} is not a directory")
             raise FUSEError(errno.ENOTDIR)
         
         entries = list(self.directories[inode].items())
         entries.sort() 
         
-        logger.debug(f"readdir: 读取目录 {inode}，从偏移量 {off} 开始，共有 {len(entries)} 个条目")
+        logger.debug(f"readdir: read directory {inode}, starting from offset {off}, {len(entries)} entries")
         
-        # 从off开始返回目录项
+        # return directory entries starting from offset
         for i, (name, child_inode) in enumerate(entries[off:], off):
-            name_bytes = os.fsencode(name)  # 将str转换为bytes
-            attr = await self.getattr(child_inode)  # 获取属性
+            name_bytes = os.fsencode(name)  # convert str to bytes
+            attr = await self.getattr(child_inode)  # get attributes
             if not pyfuse3.readdir_reply(token, name_bytes, attr, i+1):
                 break
         
         return
 
     async def mkdir(self, parent_inode, name, mode, ctx):
-        """创建目录（创建一个新的对话session）"""
+        """create directory (create a new conversation session)"""
         if parent_inode != pyfuse3.ROOT_INODE:
-            logger.debug(f"mkdir: 尝试在非根目录 {parent_inode} 下创建目录")
-            raise FUSEError(errno.EPERM)  # 只允许在根目录下创建会话目录
+            logger.debug(f"mkdir: try to create directory under non-root directory {parent_inode}")
+            raise FUSEError(errno.EPERM)  # only allow creating session directory under root
         
-        name_str = os.fsdecode(name)  # 将bytes转换为str
+        name_str = os.fsdecode(name)  # convert bytes to str
         if name_str in self.directories[parent_inode]:
-            logger.debug(f"mkdir: 目录 {name_str} 已存在")
+            logger.debug(f"mkdir: directory {name_str} already exists")
             raise FUSEError(errno.EEXIST)
         
-        # 创建会话目录
+        # create session directory
         inode = self._create_node(NodeType.DIR, mode)
         self.directories[parent_inode][name_str] = inode
         self.directories[inode] = {}
         
-        # 在会话目录中创建input、output和error文件
+        # create input, output and error files in session directory
         try:
             self._create_session_files(inode)
-            logger.debug(f"mkdir: 创建会话目录 {name_str}，inode={inode}，并创建了会话文件")
+            logger.debug(f"mkdir: create session directory {name_str}, inode={inode}, and created session files")
         except Exception as e:
-            logger.error(f"创建会话文件失败: {e}", exc_info=True)
+            logger.error(f"failed to create session files: {e}", exc_info=True)
             raise
         
         return await self.getattr(inode)
 
     def _create_session_files(self, session_inode):
-        """在会话目录中创建必要的文件"""
-        # 创建input文件
+        """create necessary files in session directory"""
+        # create input file
         input_inode = self._create_node(NodeType.FILE, stat.S_IFREG | 0o644)
         self.directories[session_inode]['input'] = input_inode
-        logger.debug(f"已在会话 {session_inode} 中创建input文件，inode={input_inode}")
+        logger.debug(f"created input file in session {session_inode}, inode={input_inode}")
         
-        # 创建output文件
+        # create output file
         output_inode = self._create_node(NodeType.FILE, stat.S_IFREG | 0o644)
         self.directories[session_inode]['output'] = output_inode
-        logger.debug(f"已在会话 {session_inode} 中创建output文件，inode={output_inode}")
+        logger.debug(f"created output file in session {session_inode}, inode={output_inode}")
         
-        # 创建error文件
+        # create error file
         error_inode = self._create_node(NodeType.FILE, stat.S_IFREG | 0o644)
         self.directories[session_inode]['error'] = error_inode
-        logger.debug(f"已在会话 {session_inode} 中创建error文件，inode={error_inode}")
+        logger.debug(f"created error file in session {session_inode}, inode={error_inode}")
 
     def _create_node(self, type_, mode):
-        """创建一个新节点"""
+        """create a new node"""
         inode = self.next_inode
         self.next_inode += 1
         
@@ -183,150 +181,163 @@ class GPTfs(pyfuse3.Operations):
         return inode
 
     async def open(self, inode, flags, ctx):
-        """打开文件"""
+        """open file"""
         if inode not in self.nodes:
-            logger.debug(f"open: 节点 {inode} 不存在")
+            logger.debug(f"open: node {inode} does not exist")
             raise FUSEError(errno.ENOENT)
         
         node_type, _ = self.nodes[inode]
         if node_type != NodeType.FILE:
-            logger.debug(f"open: 节点 {inode} 不是文件")
+            logger.debug(f"open: node {inode} is not a file")
             raise FUSEError(errno.EISDIR)
         
-        # 跟踪文件打开标志
+        # track file open flags
         open_flags = flags
         self.open_files[inode] = {
             'flags': open_flags,
             'truncated': False,
-            'direct_io': False,  # 默认不使用直接IO
-            'keep_cache': False  # 默认不保持缓存
+            'direct_io': False,  # default not use direct IO
+            'keep_cache': False  # default not keep cache
         }
         
-        # 检查是否需要截断文件
+        # check if truncate file
         if flags & os.O_TRUNC:
-            logger.debug(f"open: 截断文件 {inode}")
+            logger.debug(f"open: truncate file {inode}")
             self.data[inode] = b''
             self.nodes[inode][1].st_size = 0
             self.nodes[inode][1].st_mtime_ns = int(time.time() * 1e9)
             self.open_files[inode]['truncated'] = True
         
-        logger.debug(f"open: 打开文件 {inode}，标志: {flags}")
+        logger.debug(f"open: open file {inode}, flags: {flags}")
         
-        # 对于output文件，使用直接IO以避免缓存问题
+        # for output file, use direct IO to avoid cache problem
         if self._is_output_file(inode):
-            logger.debug(f"open: 文件 {inode} 是output文件，使用直接IO")
+            logger.debug(f"open: file {inode} is output file, use direct IO")
             self.open_files[inode]['direct_io'] = True
             return pyfuse3.FileInfo(fh=inode, direct_io=True)
         
         return pyfuse3.FileInfo(fh=inode)
 
     async def release(self, fh):
-        """关闭文件"""
+        """close file"""
         if fh in self.open_files:
-            logger.debug(f"release: 关闭文件 {fh}")
+            logger.debug(f"release: close file {fh}")
             del self.open_files[fh]
         return
 
     async def read(self, fh, off, size):
-        """读取文件内容"""
+        """read file content"""
         if fh not in self.nodes or self.nodes[fh][0] != NodeType.FILE:
-            logger.debug(f"read: 文件句柄 {fh} 无效")
+            logger.debug(f"read: invalid file handle {fh}")
             raise FUSEError(errno.EINVAL)
         
         data = self.data[fh]
-        logger.debug(f"read: 从文件 {fh} 的偏移量 {off} 读取 {size} 字节，实际可读 {len(data) - off if off < len(data) else 0} 字节")
+        logger.debug(f"read: read {size} bytes from file {fh}, offset {off}, actual readable {len(data) - off if off < len(data) else 0} bytes")
         return data[off:off+size]
 
     async def write(self, fh, off, buf):
-        """写入文件内容"""
+        """write file content"""
         if fh not in self.nodes or self.nodes[fh][0] != NodeType.FILE:
-            logger.debug(f"write: 文件句柄 {fh} 无效")
+            logger.debug(f"write: invalid file handle {fh}")
             raise FUSEError(errno.EINVAL)
         
-        # 更新文件内容
+        # update file content
         data = self.data[fh]
         
-        # 如果这是第一次写入，且文件应该被截断，则忽略偏移量
+        # if this is the first write and the file should be truncated, ignore the offset
         if fh in self.open_files and self.open_files[fh].get('truncated', False):
-            logger.debug(f"write: 文件 {fh} 已被截断，直接写入")
+            logger.debug(f"write: file {fh} has been truncated, write directly")
             self.data[fh] = buf
-            self.open_files[fh]['truncated'] = False  # 重置截断标志
+            self.open_files[fh]['truncated'] = False  # reset truncated flag
         else:
-            # 正常写入
+            # normal write
             if off + len(buf) > len(data):
                 data = data[:off] + buf
             else:
                 data = data[:off] + buf + data[off+len(buf):]
             self.data[fh] = data
         
-        # 更新文件大小
+        # update file size
         self.nodes[fh][1].st_size = len(self.data[fh])
         self.nodes[fh][1].st_mtime_ns = int(time.time() * 1e9)
         
-        logger.debug(f"write: 向文件 {fh} 的偏移量 {off} 写入 {len(buf)} 字节，新大小: {len(self.data[fh])}")
+        logger.debug(f"write: write {len(buf)} bytes to file {fh}, offset {off}, new size: {len(self.data[fh])}")
         
-        # 如果是input文件，处理GPT请求
+        # if this is input file, process GPT request
         try:
             if self._is_input_file(fh):
-                logger.debug(f"write: 检测到写入input文件，准备触发GPT请求")
+                logger.debug(f"write: detected writing to input file, prepare to trigger GPT request")
                 session_inode = self._find_session_inode(fh)
                 if session_inode:
-                    # 使用后台任务处理请求，避免阻塞write调用
+                    # use background task to process request, avoid blocking write call
                     trio.lowlevel.spawn_system_task(self._process_gpt_request, session_inode)
-                    logger.debug(f"write: 已在后台触发GPT请求处理")
+                    logger.debug(f"write: triggered GPT request processing in background")
         except Exception as e:
-            logger.error(f"触发GPT请求失败: {e}", exc_info=True)
-            # 不抛出异常，write操作本身仍然成功
+            logger.error(f"failed to trigger GPT request: {e}", exc_info=True)
+            # do not raise exception, write operation itself still succeeds
         
         return len(buf)
     
     def _is_input_file(self, inode):
-        """判断是否是input文件"""
-        # 遍历目录查找input文件
+        """check if this is input file"""
+        # traverse directory to find input file
         for dir_inode, entries in self.directories.items():
             if 'input' in entries and entries['input'] == inode:
                 return True
         return False
     
     def _is_output_file(self, inode):
-        """判断是否是output文件"""
-        # 遍历目录查找output文件
+        """check if this is output file"""
+        # traverse directory to find output file
         for dir_inode, entries in self.directories.items():
             if 'output' in entries and entries['output'] == inode:
                 return True
         return False
     
     def _find_session_inode(self, input_inode):
-        """根据input文件的inode找到对应的session目录inode"""
+        """find session directory inode according to input file inode"""
         for session_inode, entries in self.directories.items():
             if 'input' in entries and entries['input'] == input_inode:
                 return session_inode
         return None
     
     async def _invalidate_cache(self, inode):
-        """使指定inode的缓存失效"""
+        """invalidate cache for specified inode"""
         try:
-            logger.debug(f"_invalidate_cache: 使节点 {inode} 的缓存失效")
-            await pyfuse3.invalidate_inode(inode)
+            # check if inode is valid
+            if inode not in self.nodes:
+                logger.debug(f"_invalidate_cache: skipping invalidation for non-existent inode {inode}")
+                return
+                
+            logger.debug(f"_invalidate_cache: invalidate cache for node {inode}")
+            # use try/except to handle possible errors
+            try:
+                result = pyfuse3.invalidate_inode(inode)
+                if result is not None:  # only await when return value is not None
+                    await result
+            except FileNotFoundError:
+                logger.debug(f"_invalidate_cache: inode {inode} not found in FUSE layer, ignoring")
+            except Exception as e:
+                logger.warning(f"_invalidate_cache: non-critical error invalidating inode {inode}: {e}")
         except Exception as e:
-            logger.error(f"_invalidate_cache: 使缓存失效失败: {e}", exc_info=True)
+            logger.error(f"_invalidate_cache: failed to invalidate cache: {e}", exc_info=True)
 
     async def _process_gpt_request(self, session_inode):
-        """处理GPT请求"""
+        """process GPT request"""
         try:
-            logger.debug(f"_process_gpt_request: 开始处理会话 {session_inode} 的GPT请求")
+            logger.debug(f"_process_gpt_request: start processing GPT request for session {session_inode}")
             entries = self.directories[session_inode]
             input_inode = entries['input']
             output_inode = entries['output']
             error_inode = entries['error']
             
-            # 获取用户输入
+            # get user input
             prompt = self.data[input_inode].decode('utf-8', errors='replace')
-            logger.debug(f"_process_gpt_request: 用户输入: {prompt[:50]}...")
+            logger.debug(f"_process_gpt_request: user input: {prompt[:50]}...")
             
             try:
-                # 调用GPT API
-                logger.debug("_process_gpt_request: 调用OpenAI API...")
+                # call OpenAI API
+                logger.debug("_process_gpt_request: calling OpenAI API...")
                 response = await client.chat.completions.create(
                     model=model_name,
                     messages=[
@@ -334,200 +345,146 @@ class GPTfs(pyfuse3.Operations):
                     ]
                 )
                 
-                # 获取回复文本
+                # get reply text
                 gpt_response = response.choices[0].message.content
-                logger.debug(f"_process_gpt_request: 获取到API响应: {gpt_response[:50]}...")
+                logger.debug(f"_process_gpt_request: got API response: {gpt_response[:50]}...")
                 
-                # 写入output文件
+                # write to output file
                 self.data[output_inode] = gpt_response.encode('utf-8')
                 self.nodes[output_inode][1].st_size = len(self.data[output_inode])
                 self.nodes[output_inode][1].st_mtime_ns = int(time.time() * 1e9)
-                logger.debug("_process_gpt_request: 已更新output文件")
+                logger.debug("_process_gpt_request: updated output file")
                 
-                # 清空error文件
+                # clear error file
                 self.data[error_inode] = b''
                 self.nodes[error_inode][1].st_size = 0
                 self.nodes[error_inode][1].st_mtime_ns = int(time.time() * 1e9)
                 
-                # 使缓存失效，确保能立即读取到新内容
+                # invalidate cache, ensure new content can be read immediately
                 await self._invalidate_cache(output_inode)
                 await self._invalidate_cache(error_inode)
                 
-                # 查找会话目录名称，用于日志记录
-                session_name = "未知会话"
+                # find session directory name, for logging
+                session_name = "unknown session"
                 for name, inode in self.directories[pyfuse3.ROOT_INODE].items():
                     if inode == session_inode:
                         session_name = name
                         break
                 
-                logger.info(f"GPT请求处理成功，会话: {session_name}")
+                logger.info(f"GPT request processed successfully, session: {session_name}")
                 
             except Exception as e:
-                # 写入error文件
+                # write to error file
                 error_msg = f"Error: {str(e)}"
-                logger.error(f"_process_gpt_request: 处理GPT请求失败: {e}", exc_info=True)
+                logger.error(f"_process_gpt_request: failed to process GPT request: {e}", exc_info=True)
                 self.data[error_inode] = error_msg.encode('utf-8')
                 self.nodes[error_inode][1].st_size = len(self.data[error_inode])
                 self.nodes[error_inode][1].st_mtime_ns = int(time.time() * 1e9)
                 
-                # 使error文件的缓存失效
+                # invalidate cache for error file
                 await self._invalidate_cache(error_inode)
         except Exception as e:
-            logger.error(f"_process_gpt_request: 处理过程中发生未捕获的异常: {e}", exc_info=True)
+            logger.error(f"_process_gpt_request: failed to process GPT request: {e}", exc_info=True)
 
     async def setattr(self, inode, attr, fields, fh, ctx):
-        """设置文件属性"""
+        """set file attributes"""
         if inode not in self.nodes:
-            logger.debug(f"setattr: 节点 {inode} 不存在")
+            logger.debug(f"setattr: node {inode} does not exist")
             raise FUSEError(errno.ENOENT)
         
         node_type, attrs = self.nodes[inode]
         
         if fields.update_size:
             if node_type == NodeType.DIR:
-                logger.debug(f"setattr: 尝试设置目录 {inode} 的大小")
+                logger.debug(f"setattr: try to set size for directory {inode}")
                 raise FUSEError(errno.EISDIR)
             
-            # 处理文件截断
+            # handle file truncation
             old_size = attrs.st_size
             attrs.st_size = attr.st_size
             
             if attr.st_size < old_size:
-                # 截断文件
-                logger.debug(f"setattr: 截断文件 {inode} 从 {old_size} 到 {attr.st_size}")
+                # truncate file
+                logger.debug(f"setattr: truncate file {inode} from {old_size} to {attr.st_size}")
                 self.data[inode] = self.data[inode][:attr.st_size]
             elif attr.st_size > old_size:
-                # 扩展文件
-                logger.debug(f"setattr: 扩展文件 {inode} 从 {old_size} 到 {attr.st_size}")
+                # extend file
+                logger.debug(f"setattr: extend file {inode} from {old_size} to {attr.st_size}")
                 self.data[inode] = self.data[inode] + b'\0' * (attr.st_size - old_size)
             
-            # 如果文件被截断为0，标记为已截断
+            # if file is truncated to 0, mark as truncated
             if attr.st_size == 0 and inode in self.open_files:
                 self.open_files[inode]['truncated'] = True
-                logger.debug(f"setattr: 文件 {inode} 被截断为0，标记为已截断")
+                logger.debug(f"setattr: file {inode} is truncated to 0, marked as truncated")
         
-        # 处理其他属性的更新
+        # handle other attribute updates
         if fields.update_mode:
             attrs.st_mode = (attrs.st_mode & ~0o777) | (attr.st_mode & 0o777)
-            logger.debug(f"setattr: 更新文件 {inode} 的模式为 {attrs.st_mode}")
+            logger.debug(f"setattr: updated file {inode} mode to {attrs.st_mode}")
         
         if fields.update_uid:
             attrs.st_uid = attr.st_uid
-            logger.debug(f"setattr: 更新文件 {inode} 的uid为 {attr.st_uid}")
+            logger.debug(f"setattr: updated file {inode} uid to {attr.st_uid}")
         
         if fields.update_gid:
             attrs.st_gid = attr.st_gid
-            logger.debug(f"setattr: 更新文件 {inode} 的gid为 {attr.st_gid}")
+            logger.debug(f"setattr: updated file {inode} gid to {attr.st_gid}")
         
         if fields.update_atime:
             attrs.st_atime_ns = attr.st_atime_ns
-            logger.debug(f"setattr: 更新文件 {inode} 的atime")
+            logger.debug(f"setattr: updated file {inode} atime")
         
         if fields.update_mtime:
             attrs.st_mtime_ns = attr.st_mtime_ns
-            logger.debug(f"setattr: 更新文件 {inode} 的mtime")
+            logger.debug(f"setattr: updated file {inode} mtime")
         
         return attrs
 
-    async def unlink(self, parent_inode, name, ctx):
-        """删除文件"""
-        if parent_inode not in self.directories:
-            logger.debug(f"unlink: 父节点 {parent_inode} 不存在")
-            raise FUSEError(errno.ENOENT)
-        
-        name_str = os.fsdecode(name)  # 将bytes转换为str
-        if name_str not in self.directories[parent_inode]:
-            logger.debug(f"unlink: 在目录 {parent_inode} 中未找到 {name_str}")
-            raise FUSEError(errno.ENOENT)
-        
-        inode = self.directories[parent_inode][name_str]
-        if self.nodes[inode][0] == NodeType.DIR:
-            logger.debug(f"unlink: 尝试删除目录 {inode}，但使用了unlink")
-            raise FUSEError(errno.EISDIR)
-        
-        # 禁止删除session中的特殊文件
-        if name_str in ['input', 'output', 'error'] and self._is_session_dir(parent_inode):
-            logger.debug(f"unlink: 尝试删除会话中的特殊文件 {name_str}")
-            raise FUSEError(errno.EPERM)
-        
-        logger.debug(f"unlink: 删除文件 {name_str}，inode={inode}")
-        del self.directories[parent_inode][name_str]
-        del self.nodes[inode]
-        if inode in self.data:
-            del self.data[inode]
-        if inode in self.open_files:
-            del self.open_files[inode]
-
     def _is_session_dir(self, inode):
-        """判断是否是会话目录"""
-        # 检查是否是根目录的子目录
+        """check if this is session directory"""
+        # check if this is a subdirectory of root directory
         for name, child_inode in self.directories[pyfuse3.ROOT_INODE].items():
             if child_inode == inode:
                 return True
         return False
 
-    async def rmdir(self, parent_inode, name, ctx):
-        """删除目录"""
-        if parent_inode not in self.directories:
-            logger.debug(f"rmdir: 父节点 {parent_inode} 不存在")
-            raise FUSEError(errno.ENOENT)
-        
-        name_str = os.fsdecode(name)  # 将bytes转换为str
-        if name_str not in self.directories[parent_inode]:
-            logger.debug(f"rmdir: 在目录 {parent_inode} 中未找到 {name_str}")
-            raise FUSEError(errno.ENOENT)
-        
-        inode = self.directories[parent_inode][name_str]
-        if self.nodes[inode][0] != NodeType.DIR:
-            logger.debug(f"rmdir: {inode} 不是目录")
-            raise FUSEError(errno.ENOTDIR)
-        
-        if self.directories[inode]:
-            logger.debug(f"rmdir: 目录 {inode} 不为空")
-            raise FUSEError(errno.ENOTEMPTY)
-        
-        logger.debug(f"rmdir: 删除目录 {name_str}，inode={inode}")
-        del self.directories[parent_inode][name_str]
-        del self.nodes[inode]
-        del self.directories[inode]
-
 async def main(mountpoint):
-    """主函数"""
-    logger.info(f"准备挂载GPT文件系统到 {mountpoint}")
+    """main function"""
+    logger.info(f"prepare to mount GPT file system to {mountpoint}")
     gptfs = GPTfs()
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=gptfs')
     fuse_options.discard('default_permissions')
     
     try:
-        logger.info("初始化FUSE")
+        logger.info("initialize FUSE")
         pyfuse3.init(gptfs, mountpoint, fuse_options)
-        logger.info("启动FUSE主循环")
+        logger.info("start FUSE main loop")
         await pyfuse3.main()
     except Exception as e:
-        logger.error(f"FUSE主循环中发生错误: {e}", exc_info=True)
+        logger.error(f"error in FUSE main loop: {e}", exc_info=True)
         raise
     finally:
-        logger.info("关闭FUSE")
+        logger.info("close FUSE")
         pyfuse3.close()
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
-        print(f"用法: {sys.argv[0]} <挂载点>")
+        print(f"Usage: {sys.argv[0]} <mount point>")
         sys.exit(1)
     
     mountpoint = sys.argv[1]
     if not os.path.isdir(mountpoint):
-        print(f"错误: 挂载点 {mountpoint} 不存在或不是目录")
+        print(f"Error: mount point {mountpoint} does not exist or is not a directory")
         sys.exit(1)
     
-    logging.info(f"开始挂载GPT文件系统到 {mountpoint}")
+    logging.info(f"start to mount GPT file system to {mountpoint}")
     try:
         trio.run(main, mountpoint)
     except KeyboardInterrupt:
-        logging.info("收到中断信号，正在卸载文件系统...")
+        logging.info("received interrupt signal, unmounting file system...")
     except Exception as e:
-        logging.error(f"发生错误: {e}", exc_info=True)
+        logging.error(f"error: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        logging.info("GPT文件系统已卸载")
+        logging.info("GPT file system has been unmounted")
