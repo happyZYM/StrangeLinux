@@ -7,4 +7,6 @@ SafeStrPrint(
   IN UINT8 *str_ptr,
   IN UINTN max_len
 );
+
+extern BOOLEAN hack_acpi_mode;
 #endif // ZYM_ACPIVIEW_UTILS_H_

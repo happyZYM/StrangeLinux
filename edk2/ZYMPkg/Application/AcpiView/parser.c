@@ -38,6 +38,21 @@ ParseHeader(
   *oem_revision_ptr = ReadUnaligned32((UINT32 *)(table_ptr + 24));
   *creator_id_ptr = ReadUnaligned32((UINT32 *)(table_ptr + 28));
   *creator_revision_ptr = ReadUnaligned32((UINT32 *)(table_ptr + 32));
+
+  if (hack_acpi_mode) {
+    // we change creator revision as it seems harmless
+    WriteUnaligned32((UINT32 *)(table_ptr + 32), 0x12345678);
+    UINT8 sum = 0;
+    UINTN idx;
+    for(idx = 0; idx < *length_ptr; idx++) {
+      sum += ((UINT8 *)table_ptr)[idx];
+    }
+    UINT8 check_sum_delta = 0x100 - sum;
+    *(UINT8 *)(table_ptr + 9) += check_sum_delta;
+
+    *creator_revision_ptr = 0x12345678;
+    *checksum_ptr = *(UINT8 *)(table_ptr + 9);
+  }
 }
 
 EFI_STATUS

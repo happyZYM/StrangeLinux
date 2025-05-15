@@ -31,6 +31,7 @@
 [Protocols]
   gEfiAcpiTableProtocolGuid    ## CONSUMES
   gEfiAcpiSdtProtocolGuid      ## CONSUMES
+  gEfiLoadedImageProtocolGuid  ## CONSUMES
 
 [Guids]
   gEfiAcpiTableGuid           ## SOMETIMES_CONSUMES ## SystemTable 

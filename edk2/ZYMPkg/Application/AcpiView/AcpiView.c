@@ -8,9 +8,12 @@
 #include <Library/MemoryAllocationLib.h>
 #include <Protocol/AcpiTable.h>
 #include <Protocol/AcpiSystemDescriptionTable.h>
+#include <Protocol/LoadedImage.h>
 #include <IndustryStandard/Acpi.h>
 #include <AcpiView/utils.h>
 #include <AcpiView/parser.h>
+
+BOOLEAN hack_acpi_mode;
 
 EFI_STATUS
 EFIAPI
@@ -20,6 +23,36 @@ UefiMain (
   )
 {
   Print (L"ZYM's ACPI Table Viewer\n");
+
+  hack_acpi_mode = FALSE;
+  
+  // Get LoadedImage protocol to access command line arguments
+  EFI_LOADED_IMAGE_PROTOCOL *LoadedImage;
+  EFI_STATUS Status;
+  Status = gBS->HandleProtocol (
+                  ImageHandle,
+                  &gEfiLoadedImageProtocolGuid,
+                  (VOID **)&LoadedImage
+                  );
+  if (!EFI_ERROR (Status)) {
+    if (LoadedImage->LoadOptionsSize > 0 && LoadedImage->LoadOptions != NULL) {
+      CHAR16 *CmdLine = (CHAR16 *)LoadedImage->LoadOptions;
+      UINTN CmdLineLen = LoadedImage->LoadOptionsSize / sizeof (CHAR16);
+      Print (L"Command line arguments: %.*s\n", CmdLineLen, CmdLine);
+      
+      if (StrStr(CmdLine, L"hack_acpi_mode") != NULL) {
+        hack_acpi_mode = TRUE;
+      }
+    } else {
+      Print (L"No command line arguments provided\n");
+    }
+  }
+
+  if (hack_acpi_mode) {
+    Print(L"hack_acpi_mode\n");
+    // return EFI_SUCCESS;
+  }
+  
   UINT8 *rsdp_ptr;
   BOOLEAN rsdp_found = FALSE;
   UINTN idx;
