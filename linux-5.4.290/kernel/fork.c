@@ -171,6 +171,7 @@ static inline struct task_struct *alloc_task_struct_node(int node)
 
 static inline void free_task_struct(struct task_struct *tsk)
 {
+	kv_store_dereference(tsk);
 	kmem_cache_free(task_struct_cachep, tsk);
 }
 #endif
@@ -2089,10 +2090,15 @@ static __latent_entropy struct task_struct *copy_process(
 #endif
 	futex_init_task(p);
 
-	if (clone_flags & CLONE_THREAD) {
-		p->kv_store_ptr = current->kv_store_ptr;
+	if (clone_flags & CLONE_THREAD) { // traditional thread
+		// p->kv_store_ptr = current->kv_store_ptr;
+		kv_store_reference(p, current);
+	} else if (clone_flags & CLONE_VM) {
+		// p->kv_store_ptr = current->kv_store_ptr; // explicitly share the same memory space, therefore kv_store is also shared
+		kv_store_reference(p, current); // explicitly share the same memory space, therefore kv_store is also shared
 	} else {
-		kv_store_initialize(p);
+		// kv_store_creation(p);
+		kv_store_copy(p, current);
 	}
 
 	/*

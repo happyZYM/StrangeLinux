@@ -634,10 +634,14 @@ struct kv_store_node {
 struct kv_store_struct {
 	struct hlist_head kv_store[1024];
 	spinlock_t kv_store_lock[1024];
+	atomic_t refcount;
+	spinlock_t kv_store_global_lock;
 };
 
-int kv_store_initialize(struct task_struct *task);
-void kv_store_release(struct task_struct *task);
+int kv_store_creation(struct task_struct *task);
+void kv_store_dereference(struct task_struct *task);
+void kv_store_copy(struct task_struct *new_task, struct task_struct *old_task);
+void kv_store_reference(struct task_struct *new_task, struct task_struct *old_task);
 
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK

@@ -63,6 +63,7 @@
 #include <linux/oom.h>
 #include <linux/compat.h>
 #include <linux/vmalloc.h>
+#include <linux/sched.h> /* For kv_store functions */
 
 #include <linux/uaccess.h>
 #include <asm/mmu_context.h>
@@ -1424,6 +1425,15 @@ void setup_new_exec(struct linux_binprm * bprm)
 	   group */
 	WRITE_ONCE(current->self_exec_id, current->self_exec_id + 1);
 	flush_signal_handlers(current, 0);
+
+	/* Completely reinitialize the kv_store for execve */
+	if (current->kv_store_ptr) {
+		kv_store_dereference(current);
+	}
+	/* If kv_store_creation fails, we'll just have a NULL kv_store_ptr,
+	 * which is a valid state (though operations on it will fail).
+	 */
+	kv_store_creation(current);
 }
 EXPORT_SYMBOL(setup_new_exec);
 
