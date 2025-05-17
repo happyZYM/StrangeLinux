@@ -1,18 +1,18 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2
-LDFLAGS = -static
+LDFLAGS = -static -pthread
 
 BUILD_DIR = ../build/prog
-TARGET = $(BUILD_DIR)/helloworld
-SRC = helloworld.c
+TARGETS = helloworld test1 test2 test3
+TARGETS_FULL = $(addprefix $(BUILD_DIR)/,$(TARGETS))
 
 .PHONY: all clean
 
-all: $(TARGET)
+all: $(TARGETS_FULL)
 
-$(TARGET): $(SRC)
+$(BUILD_DIR)/%: %.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGETS_FULL)

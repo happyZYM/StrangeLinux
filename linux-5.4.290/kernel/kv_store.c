@@ -63,7 +63,7 @@ SYSCALL_DEFINE1(read_kv, int, k) {
     
     unsigned int hash = (unsigned int)k % 1024;
     struct kv_store_node *node_ptr;
-    int value = 0;
+    int value = -1;
     
     spin_lock(&kv_store->kv_store_lock[hash]);
     
