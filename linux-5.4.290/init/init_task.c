@@ -59,6 +59,7 @@ struct task_struct init_task
 	__init_task_data
 #endif
 = {
+	.kv_store_ptr   = NULL,
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	.thread_info	= INIT_THREAD_INFO(init_task),
 	.stack_refcount	= REFCOUNT_INIT(1),

@@ -2089,6 +2089,12 @@ static __latent_entropy struct task_struct *copy_process(
 #endif
 	futex_init_task(p);
 
+	if (clone_flags & CLONE_THREAD) {
+		p->kv_store_ptr = current->kv_store_ptr;
+	} else {
+		kv_store_initialize(p);
+	}
+
 	/*
 	 * sigaltstack should be cleared when sharing the same VM
 	 */

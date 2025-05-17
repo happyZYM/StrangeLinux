@@ -625,6 +625,20 @@ struct wake_q_node {
 	struct wake_q_node *next;
 };
 
+struct kv_store_node {
+	int key;
+	int value;
+	struct hlist_node node;
+};
+
+struct kv_store_struct {
+	struct hlist_head kv_store[1024];
+	spinlock_t kv_store_lock[1024];
+};
+
+int kv_store_initialize(struct task_struct *task);
+void kv_store_release(struct task_struct *task);
+
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*
@@ -1272,6 +1286,8 @@ struct task_struct {
 	unsigned long			lowest_stack;
 	unsigned long			prev_lowest_stack;
 #endif
+
+	struct kv_store_struct *kv_store_ptr; // add at the end to avoid breaking those stupid position dependent code
 
 	/*
 	 * New fields for task_struct should be added above here, so that
