@@ -7,9 +7,8 @@
 #include <errno.h>
 
 struct task_info {
-    pid_t pid;
     void *task_struct_ptr;
-    // other key fields...
+    pid_t pid;
 };
 
 int get_task_struct_info(struct task_info *info) {
@@ -21,9 +20,9 @@ int get_task_struct_info(struct task_info *info) {
         return -1;
     }
     
-    int (*vdso_get_task_info)(struct task_info *) = dlsym(handle, "__vdso_get_task_info");
+    int (*vdso_get_task_info)(struct task_info *) = dlsym(handle, "get_task_struct_info");
     if (!vdso_get_task_info) {
-        fprintf(stderr, "Failed to find __vdso_get_task_info: %s\n", dlerror());
+        fprintf(stderr, "Failed to find get_task_struct_info: %s\n", dlerror());
         dlclose(handle);
         return -1;
     }
@@ -37,12 +36,16 @@ int get_task_struct_info(struct task_info *info) {
 int validate_task_struct_ptr(void *ptr) {
     unsigned long addr = (unsigned long)ptr;
     
-    if (addr < 0xFFFF800000000000UL) {
-        fprintf(stderr, "Warning: task_struct pointer %p is not in expected kernel address range\n", ptr);
+    if (addr >= 0x7F0000000000UL && addr < 0x800000000000UL) {
+        printf("Info: task_struct accessible at user virtual address %p\n", ptr);
+        return 1;
+    } else if (addr >= 0xFFFF800000000000UL) {
+        printf("Info: task_struct at kernel virtual address %p\n", ptr);
+        return 1;
+    } else {
+        fprintf(stderr, "Warning: task_struct pointer %p is in unexpected address range\n", ptr);
         return 0;
     }
-    
-    return 1;
 }
 
 pid_t get_pid_from_proc_stat() {

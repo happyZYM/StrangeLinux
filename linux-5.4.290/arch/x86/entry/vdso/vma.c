@@ -128,6 +128,50 @@ static vm_fault_t vvar_fault(const struct vm_special_mapping *sm,
 	return VM_FAULT_SIGBUS;
 }
 
+#define VTASK_SIZE  (ALIGN(sizeof(struct task_struct), PAGE_SIZE) + PAGE_SIZE)
+static vm_fault_t vtask_fault(const struct vm_special_mapping *sm,
+                      struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	pr_info("vtask_fault: vma->vm_start = %lx, vma->vm_end = %lx, vmf->pgoff = %lx\n",
+        vma->vm_start, vma->vm_end, vmf->pgoff);
+	
+	unsigned long offset = vmf->pgoff << PAGE_SHIFT;
+
+	if (offset >= VTASK_SIZE)
+		return VM_FAULT_SIGBUS;
+
+	unsigned long task_struct_offset = __pa((char *)current) & (~PAGE_MASK);
+	pr_info("_pa(current) = %lx, offset = %ld\n", __pa(current), task_struct_offset);
+	// 第一个页面用于映射 task_struct_view
+	if (vmf->pgoff == 0) {
+		pr_info("create a page for task_struct_view \npage_offset=%lx pid=%d\n", task_struct_offset, current->pid);
+		// 创建一个页面
+		struct page *page;
+        struct task_info_view *view;
+        
+        // 分配一个页面用于存放结构体视图
+        page = alloc_page(GFP_KERNEL);
+        if (!page)
+            return VM_FAULT_OOM;
+            
+        // 获取页面地址并填充结构体
+        view = page_address(page);
+        memset(view, 0, PAGE_SIZE);  // 清空页面
+        
+        // 填充结构体信息
+        view->page_offset = task_struct_offset;
+        view->pid = current->pid;
+        
+        // 将该页映射到用户空间
+        get_page(page);
+        vmf->page = page;
+        return 0;
+	} else {
+		return vmf_insert_pfn(vma, vmf->address,
+			(__pa((char *)current + offset - PAGE_SIZE)) >> PAGE_SHIFT);
+	}		
+}
+
 static const struct vm_special_mapping vdso_mapping = {
 	.name = "[vdso]",
 	.fault = vdso_fault,
@@ -136,6 +180,10 @@ static const struct vm_special_mapping vdso_mapping = {
 static const struct vm_special_mapping vvar_mapping = {
 	.name = "[vvar]",
 	.fault = vvar_fault,
+};
+static const struct vm_special_mapping vtask_mapping = {
+    .name = "[vtask]",
+    .fault = vtask_fault,
 };
 
 /*
@@ -154,13 +202,15 @@ static int map_vdso(const struct vdso_image *image, unsigned long addr)
 		return -EINTR;
 
 	addr = get_unmapped_area(NULL, addr,
-				 image->size - image->sym_vvar_start, 0, 0);
+				 image->size - image->sym_vvar_start + VTASK_SIZE, 0, 0);
 	if (IS_ERR_VALUE(addr)) {
 		ret = addr;
 		goto up_fail;
 	}
 
-	text_start = addr - image->sym_vvar_start;
+	unsigned long vtask_start = addr;
+	unsigned long vvar_start = vtask_start + VTASK_SIZE;
+	text_start = vvar_start - image->sym_vvar_start;
 
 	/*
 	 * MAYWRITE to allow gdb to COW and set breakpoints
@@ -178,7 +228,7 @@ static int map_vdso(const struct vdso_image *image, unsigned long addr)
 	}
 
 	vma = _install_special_mapping(mm,
-				       addr,
+				       vvar_start,
 				       -image->sym_vvar_start,
 				       VM_READ|VM_MAYREAD|VM_IO|VM_DONTDUMP|
 				       VM_PFNMAP,
@@ -187,6 +237,18 @@ static int map_vdso(const struct vdso_image *image, unsigned long addr)
 	if (IS_ERR(vma)) {
 		ret = PTR_ERR(vma);
 		do_munmap(mm, text_start, image->size, NULL);
+	}
+
+	vma = _install_special_mapping(mm,
+				       vtask_start,
+				       VTASK_SIZE,
+				       VM_READ|VM_MAYREAD|VM_DONTDUMP|VM_IO|VM_PFNMAP|VM_WIPEONFORK,
+				       &vtask_mapping);
+	if (IS_ERR(vma)) {
+		ret = PTR_ERR(vma);
+		do_munmap(mm, text_start, image->size, NULL);
+		do_munmap(mm, vtask_start, VTASK_SIZE, NULL);
+		goto up_fail;
 	} else {
 		current->mm->context.vdso = (void __user *)text_start;
 		current->mm->context.vdso_image = image;
@@ -244,7 +306,7 @@ static unsigned long vdso_addr(unsigned long start, unsigned len)
 
 static int map_vdso_randomized(const struct vdso_image *image)
 {
-	unsigned long addr = vdso_addr(current->mm->start_stack, image->size-image->sym_vvar_start);
+	unsigned long addr = vdso_addr(current->mm->start_stack, image->size-image->sym_vvar_start+VTASK_SIZE);
 
 	return map_vdso(image, addr);
 }
