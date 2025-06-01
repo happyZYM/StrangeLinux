@@ -46,6 +46,7 @@ mkdir -p "$PLAYGROUND_DIR"
 cp "$OVMF_VARS" "${PLAYGROUND_DIR}/OVMF_VARS.fd"
 
 INITRAMFS_DIR="${PLAYGROUND_DIR}/initramfs"
+rm -rf "${INITRAMFS_DIR}"
 mkdir -p "${INITRAMFS_DIR}"/{bin,dev,proc,sys}
 
 # 检查是否安装了busybox
@@ -60,6 +61,12 @@ cp $(which busybox) "${INITRAMFS_DIR}/bin/busybox"
 cp "$ACPI_DUMP_PATH" "${INITRAMFS_DIR}/bin/acpidump"
 
 cp -r "$PROG_DIR" "${INITRAMFS_DIR}/"
+
+for file in "${PROG_DIR}"/*; do
+    if [ -f "$file" ]; then
+        INITRAM_DIR=${INITRAMFS_DIR} ${SCRIPT_DIR}/add_depend.sh "$file"
+    fi
+done
 
 # 创建init脚本
 cat > "${INITRAMFS_DIR}/init" << 'EOF'
@@ -122,7 +129,7 @@ bzImage initrd=initramfs.cpio.gz root=/dev/ram0 console=ttyS0
 EOF
 
 # 暂停
-# read -p "按任意键继续..."
+read -p "按任意键继续..."
 
 # 启动QEMU进入UEFI shell
 qemu-system-x86_64 \
