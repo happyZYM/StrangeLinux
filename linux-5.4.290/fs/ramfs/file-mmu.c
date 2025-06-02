@@ -35,6 +35,7 @@
 #include <linux/slab.h>
 #include <linux/pagemap.h>
 #include <linux/highmem.h>
+#include <linux/mount.h>
 
 #include "internal.h"
 
@@ -50,6 +51,114 @@ static unsigned long ramfs_mmu_get_unmapped_area(struct file *file,
 		unsigned long flags)
 {
 	return current->mm->get_unmapped_area(file, addr, len, pgoff, flags);
+}
+
+/* 创建单个目录 */
+static int create_single_dir(const char *path, umode_t mode)
+{
+	struct path parent;
+	int error;
+	
+	error = kern_path(path, LOOKUP_DIRECTORY, &parent);
+	if (!error) {
+		/* 目录已存在 */
+		path_put(&parent);
+		return 0;
+	}
+	
+	/* 获取父目录和目录名 */
+	{
+		char *tmp_path = kstrdup(path, GFP_KERNEL);
+		char *name, *parent_path;
+		
+		if (!tmp_path)
+			return -ENOMEM;
+		
+		name = strrchr(tmp_path, '/');
+		if (!name) {
+			kfree(tmp_path);
+			return -EINVAL;
+		}
+		
+		*name = '\0';
+		name++;
+		parent_path = tmp_path;
+		
+		/* 如果父路径为空，使用根目录 */
+		if (parent_path[0] == '\0')
+			parent_path = "/";
+		
+		/* 获取父目录 */
+		error = kern_path(parent_path, LOOKUP_DIRECTORY, &parent);
+		if (error) {
+			kfree(tmp_path);
+			return error;
+		}
+		
+		/* 创建目录 */
+		{
+			struct dentry *child;
+			struct inode *dir = d_inode(parent.dentry);
+			
+			inode_lock(dir);
+			child = lookup_one_len(name, parent.dentry, strlen(name));
+			if (IS_ERR(child)) {
+				error = PTR_ERR(child);
+			} else {
+				error = vfs_mkdir(dir, child, mode);
+				dput(child);
+			}
+			inode_unlock(dir);
+		}
+		
+		if (error == -EEXIST)
+			error = 0;
+		
+		path_put(&parent);
+		kfree(tmp_path);
+	}
+	
+	return error;
+}
+
+/* 递归创建目录，类似于mkdir -p */
+static int mkdir_p(const char *path, umode_t mode)
+{
+	char *tmp_path, *p;
+	int error = 0;
+	
+	/* 如果路径为空或只有根目录，直接返回成功 */
+	if (!path || !*path || (path[0] == '/' && !path[1]))
+		return 0;
+	
+	/* 复制路径以便修改 */
+	tmp_path = kstrdup(path, GFP_KERNEL);
+	if (!tmp_path)
+		return -ENOMEM;
+	
+	/* 跳过开头的斜杠 */
+	p = tmp_path;
+	if (*p == '/')
+		p++;
+	
+	/* 逐级创建目录 */
+	while ((p = strchr(p, '/'))) {
+		*p = '\0';
+		error = create_single_dir(tmp_path, mode);
+		if (error && error != -EEXIST) {
+			printk(KERN_ERR "RAMfs: 创建目录 %s 失败: %d\n", tmp_path, error);
+			break;
+		}
+		*p = '/';
+		p++;
+	}
+	
+	/* 创建最后一级目录 */
+	if (!error)
+		error = create_single_dir(tmp_path, mode);
+	
+	kfree(tmp_path);
+	return error;
 }
 
 /**
@@ -99,16 +208,106 @@ int ramfs_persist_file(struct file *file)
 		goto cleanup;
 	}
 
-	/* 构造目标文件路径 */
-	snprintf(full_path, PATH_MAX, "%s/%s", persist_info->sync_dir, dentry->d_name.name);
-	snprintf(temp_path, PATH_MAX, "%s/.%s.tmp.%ld", persist_info->sync_dir, 
-		 dentry->d_name.name, (long)current->pid);
+	/* 构造目标文件路径 - 保留目录结构 */
+	{
+		char *rel_path = NULL;
+		struct dentry *parent;
+		struct dentry *root_dentry;
+		
+		/* 分配相对路径缓冲区 */
+		rel_path = kmalloc(PATH_MAX, GFP_KERNEL);
+		if (!rel_path) {
+			ret = -ENOMEM;
+			goto cleanup;
+		}
+		rel_path[0] = '\0';
+		
+		/* 获取挂载点根目录 */
+		root_dentry = file->f_path.mnt->mnt_root;
+		
+		/* 从文件dentry开始，向上构建相对路径，直到挂载点根目录 */
+		parent = dentry->d_parent;  /* 从父目录开始，不包括文件自身 */
+		while (parent && parent != root_dentry) {
+			char tmp_path[PATH_MAX];
+			int name_len = strlen(parent->d_name.name);
+			
+			/* 跳过根目录 */
+			if (name_len == 0 || (name_len == 1 && parent->d_name.name[0] == '/')) {
+				parent = parent->d_parent;
+				continue;
+			}
+			
+			/* 构造新的相对路径 */
+			if (rel_path[0] == '\0') {
+				strcpy(tmp_path, parent->d_name.name);
+			} else {
+				snprintf(tmp_path, PATH_MAX, "%s/%s", parent->d_name.name, rel_path);
+			}
+			
+			strcpy(rel_path, tmp_path);
+			parent = parent->d_parent;
+		}
+		
+		/* 构造最终路径 */
+		if (rel_path[0] == '\0') {
+			/* 如果是挂载点根目录下的文件 */
+			snprintf(full_path, PATH_MAX, "%s/%s", persist_info->sync_dir, dentry->d_name.name);
+		} else {
+			/* 如果在子目录中 */
+			char *dir_path = kmalloc(PATH_MAX, GFP_KERNEL);
+			if (!dir_path) {
+				ret = -ENOMEM;
+				kfree(rel_path);
+				goto cleanup;
+			}
+			
+			/* 构造目录路径 */
+			snprintf(dir_path, PATH_MAX, "%s/%s", persist_info->sync_dir, rel_path);
+			
+			/* 确保目录存在 */
+			ret = mkdir_p(dir_path, 0755);
+			if (ret < 0) {
+				printk(KERN_ERR "RAMfs: 创建目录 %s 失败: %d\n", dir_path, ret);
+				kfree(dir_path);
+				kfree(rel_path);
+				goto cleanup;
+			}
+			
+			/* 构造文件完整路径 */
+			snprintf(full_path, PATH_MAX, "%s/%s", dir_path, dentry->d_name.name);
+			kfree(dir_path);
+		}
+		
+		kfree(rel_path);
+	}
+	
+	/* 确保目标文件所在目录存在 */
+	{
+		char *target_dir = kstrdup(full_path, GFP_KERNEL);
+		if (target_dir) {
+			char *last_slash = strrchr(target_dir, '/');
+			if (last_slash) {
+				*last_slash = '\0';
+				printk(KERN_DEBUG "RAMfs: 创建目标目录: %s\n", target_dir);
+				ret = mkdir_p(target_dir, 0755);
+				if (ret < 0) {
+					printk(KERN_ERR "RAMfs: 创建目标目录 %s 失败: %d\n", target_dir, ret);
+					kfree(target_dir);
+					goto cleanup;
+				}
+			}
+			kfree(target_dir);
+		}
+	}
 
+	/* 构造临时文件路径 */
+	snprintf(temp_path, PATH_MAX, "%s.tmp.%ld", full_path, (long)current->pid);
+	
 	printk(KERN_DEBUG "RAMfs: 临时文件路径: %s\n", temp_path);
 	printk(KERN_DEBUG "RAMfs: 目标文件路径: %s\n", full_path);
 
 	/* 创建临时文件 */
-	temp_file = filp_open(temp_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	temp_file = filp_open(temp_path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 	if (IS_ERR(temp_file)) {
 		ret = PTR_ERR(temp_file);
 		temp_file = NULL;
@@ -163,7 +362,7 @@ int ramfs_persist_file(struct file *file)
 	temp_file = NULL;
 
 	/* 简化的原子性重命名：直接创建最终文件 */
-	backend_file = filp_open(full_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	backend_file = filp_open(full_path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 	if (IS_ERR(backend_file)) {
 		ret = PTR_ERR(backend_file);
 		backend_file = NULL;
