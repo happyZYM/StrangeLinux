@@ -644,13 +644,13 @@ void kv_store_copy(struct task_struct *new_task, struct task_struct *old_task);
 void kv_store_reference(struct task_struct *new_task, struct task_struct *old_task);
 
 struct task_info_view {
-    unsigned long page_offset;
-    pid_t pid;
+	pid_t pid;
+    unsigned long task_struct_inpage_offset;
 };
 
 struct task_info {
-    struct task_struct *kaddr;
-    pid_t pid;
+	pid_t pid;
+    struct task_struct *task_struct_ptr;
 };
 
 struct task_struct {

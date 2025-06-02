@@ -7,8 +7,8 @@
 #include <errno.h>
 
 struct task_info {
-    void *task_struct_ptr;
     pid_t pid;
+    void *task_struct_ptr;
 };
 
 int get_task_struct_info(struct task_info *info) {
