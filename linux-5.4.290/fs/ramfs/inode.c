@@ -38,15 +38,13 @@
 #include <linux/uaccess.h>
 #include <linux/fs_context.h>
 #include <linux/fs_parser.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/namei.h>
+#include <linux/path.h>
 #include "internal.h"
 
-struct ramfs_mount_opts {
-	umode_t mode;
-};
-
-struct ramfs_fs_info {
-	struct ramfs_mount_opts mount_opts;
-};
+/* ramfs_mount_opts 和 ramfs_fs_info 已在 internal.h 中定义 */
 
 #define RAMFS_DEFAULT_MODE	0755
 
@@ -179,10 +177,12 @@ static const struct super_operations ramfs_ops = {
 
 enum ramfs_param {
 	Opt_mode,
+	Opt_persist_dir,
 };
 
 static const struct fs_parameter_spec ramfs_param_specs[] = {
 	fsparam_u32oct("mode",	Opt_mode),
+	fsparam_string("persist_dir", Opt_persist_dir),
 	{}
 };
 
@@ -213,6 +213,14 @@ static int ramfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	switch (opt) {
 	case Opt_mode:
 		fsi->mount_opts.mode = result.uint_32 & S_IALLUGO;
+		break;
+	case Opt_persist_dir:
+		/* 设置持久化目录 */
+		kfree(fsi->persist_info.sync_dir);
+		fsi->persist_info.sync_dir = kstrdup(param->string, GFP_KERNEL);
+		if (!fsi->persist_info.sync_dir)
+			return -ENOMEM;
+		fsi->persist_info.enabled = true;
 		break;
 	}
 
@@ -264,6 +272,12 @@ int ramfs_init_fs_context(struct fs_context *fc)
 		return -ENOMEM;
 
 	fsi->mount_opts.mode = RAMFS_DEFAULT_MODE;
+	
+	/* 初始化持久化信息 */
+	mutex_init(&fsi->persist_info.sync_mutex);
+	fsi->persist_info.enabled = false;
+	fsi->persist_info.sync_dir = NULL;
+	
 	fc->s_fs_info = fsi;
 	fc->ops = &ramfs_context_ops;
 	return 0;
@@ -271,7 +285,13 @@ int ramfs_init_fs_context(struct fs_context *fc)
 
 static void ramfs_kill_sb(struct super_block *sb)
 {
-	kfree(sb->s_fs_info);
+	struct ramfs_fs_info *fsi = sb->s_fs_info;
+	
+	if (fsi) {
+		/* 清理持久化资源 */
+		kfree(fsi->persist_info.sync_dir);
+		kfree(fsi);
+	}
 	kill_litter_super(sb);
 }
 
@@ -283,8 +303,58 @@ static struct file_system_type ramfs_fs_type = {
 	.fs_flags	= FS_USERNS_MOUNT,
 };
 
+/**
+ * ramfs_bind_instance - 设置特定RAMfs实例的后端同步目录
+ * @fsi: RAMfs实例信息
+ * @sync_dir: 后端同步目录路径
+ * 
+ * 返回值: 成功返回0，失败返回负错误码
+ */
+int ramfs_bind_instance(struct ramfs_fs_info *fsi, const char *sync_dir)
+{
+	char *new_dir;
+	struct path path;
+	int ret;
+
+	if (!fsi || !sync_dir)
+		return -EINVAL;
+
+	/* 检查目录是否存在 */
+	ret = kern_path(sync_dir, LOOKUP_FOLLOW, &path);
+	if (ret)
+		return ret;
+	path_put(&path);
+
+	/* 分配新的目录字符串 */
+	new_dir = kstrdup(sync_dir, GFP_KERNEL);
+	if (!new_dir)
+		return -ENOMEM;
+
+	mutex_lock(&fsi->persist_info.sync_mutex);
+	
+	/* 释放旧的目录字符串 */
+	kfree(fsi->persist_info.sync_dir);
+	
+	/* 设置新的同步目录 */
+	fsi->persist_info.sync_dir = new_dir;
+	fsi->persist_info.enabled = true;
+	
+	mutex_unlock(&fsi->persist_info.sync_mutex);
+
+	printk(KERN_INFO "RAMfs: 实例后端同步目录设置为 %s\n", sync_dir);
+	return 0;
+}
+EXPORT_SYMBOL(ramfs_bind_instance);
+
+/* 
+ * 注意: 多实例支持使用挂载参数而不是全局procfs接口
+ * 用法: mount -t ramfs -o persist_dir=/tmp/backend none /mnt/ramfs
+ */
+
 static int __init init_ramfs_fs(void)
 {
 	return register_filesystem(&ramfs_fs_type);
 }
 fs_initcall(init_ramfs_fs);
+
+/* RAMfs是内置的，不需要cleanup函数 */

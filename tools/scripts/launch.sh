@@ -47,7 +47,7 @@ cp "$OVMF_VARS" "${PLAYGROUND_DIR}/OVMF_VARS.fd"
 
 INITRAMFS_DIR="${PLAYGROUND_DIR}/initramfs"
 rm -rf "${INITRAMFS_DIR}"
-mkdir -p "${INITRAMFS_DIR}"/{bin,dev,proc,sys}
+mkdir -p "${INITRAMFS_DIR}"/{bin,dev,proc,sys,mnt,tmp}
 
 # 检查是否安装了busybox
 if ! command -v busybox &> /dev/null; then
