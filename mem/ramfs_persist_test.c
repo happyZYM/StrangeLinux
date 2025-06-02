@@ -164,11 +164,7 @@ void test_single_file_persistence() {
     
     printf("\n=== 测试2: 单文件持久化正确性 ===\n");
     
-    /* 检查是否可以设置后端目录 */
-    if (setup_ramfs_persist(BACKEND_DIR) < 0) {
-        printf("跳过持久化测试 (接口不可用)\n");
-        return;
-    }
+    /* RAMfs已经在main函数中挂载，无需重新挂载 */
     
     /* 写入RAMfs文件 */
     fd = open(TEST_FILE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -538,6 +534,9 @@ int main(int argc, char *argv[]) {
     if (setup_ramfs() < 0) {
         printf("设置RAMfs失败，某些测试将跳过\n");
     }
+    
+    /* 直接使用持久化参数挂载RAMfs */
+    setup_ramfs_persist(BACKEND_DIR);
     
     /* 运行测试 */
     test_basic_functionality();

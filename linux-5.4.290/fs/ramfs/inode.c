@@ -166,6 +166,11 @@ static int ramfs_show_options(struct seq_file *m, struct dentry *root)
 
 	if (fsi->mount_opts.mode != RAMFS_DEFAULT_MODE)
 		seq_printf(m, ",mode=%o", fsi->mount_opts.mode);
+	
+	/* 显示持久化目录参数 */
+	if (fsi->persist_info.enabled && fsi->persist_info.sync_dir)
+		seq_printf(m, ",persist_dir=%s", fsi->persist_info.sync_dir);
+		
 	return 0;
 }
 
