@@ -13,26 +13,20 @@ void get_physical_address(void *virtual_addr, const char* description) {
         perror("Failed to open pagemap");
         return;
     }
-    
     unsigned long data;
     if (pread(fd, &data, sizeof(data), virt_page * sizeof(data)) != sizeof(data)) {
         perror("Failed to read from pagemap");
         close(fd);
         return;
     }
-    
     close(fd);
-    
     if (!(data & (1ULL << 63))) {
         printf("[%s] Page not present in memory\n", description);
         return;
     }
-    
     unsigned long frame_num = data & ((1ULL << 55) - 1);
-    unsigned long physical_addr = frame_num * sysconf(_SC_PAGESIZE) + 
-                                 ((unsigned long)virtual_addr % sysconf(_SC_PAGESIZE));
-    printf("[%s] Virtual: %p -> Physical: 0x%lx (Frame: %lu)\n", 
-           description, virtual_addr, physical_addr, frame_num);
+    unsigned long physical_addr = frame_num * sysconf(_SC_PAGESIZE) + ((unsigned long)virtual_addr % sysconf(_SC_PAGESIZE));
+    printf("[%s] Virtual: %p -> Physical: 0x%lx (Frame: %lu)\n", description, virtual_addr, physical_addr, frame_num);
 }
 
 void create_memory_pressure() {
@@ -91,7 +85,7 @@ int main() {
     }
     printf("First mapping unmapped\n");
     
-    // create_memory_pressure();
+    create_memory_pressure();
     
     printf("\n--- Step 3: Remapping at same virtual address ---\n");
     void *addr2 = mmap(
