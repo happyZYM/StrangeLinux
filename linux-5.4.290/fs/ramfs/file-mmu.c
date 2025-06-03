@@ -53,7 +53,6 @@ static unsigned long ramfs_mmu_get_unmapped_area(struct file *file,
 	return current->mm->get_unmapped_area(file, addr, len, pgoff, flags);
 }
 
-/* 创建单个目录 */
 static int create_single_dir(const char *path, umode_t mode)
 {
 	struct path parent;
@@ -174,7 +173,6 @@ int ramfs_persist_file(struct file *file)
 	struct dentry *dentry = file->f_path.dentry;
 	char *full_path = NULL;
 	char *temp_path = NULL;
-	struct file *backend_file = NULL;
 	struct file *temp_file = NULL;
 	loff_t pos = 0;
 	ssize_t bytes_written;
@@ -213,6 +211,7 @@ int ramfs_persist_file(struct file *file)
 		char *rel_path = NULL;
 		struct dentry *parent;
 		struct dentry *root_dentry;
+		char *dir_path = NULL;
 		
 		/* 分配相对路径缓冲区 */
 		rel_path = kmalloc(PATH_MAX, GFP_KERNEL);
@@ -228,13 +227,21 @@ int ramfs_persist_file(struct file *file)
 		/* 从文件dentry开始，向上构建相对路径，直到挂载点根目录 */
 		parent = dentry->d_parent;  /* 从父目录开始，不包括文件自身 */
 		while (parent && parent != root_dentry) {
-			char tmp_path[PATH_MAX];
+			char *tmp_path;
 			int name_len = strlen(parent->d_name.name);
 			
 			/* 跳过根目录 */
 			if (name_len == 0 || (name_len == 1 && parent->d_name.name[0] == '/')) {
 				parent = parent->d_parent;
 				continue;
+			}
+			
+			/* 动态分配临时路径缓冲区 */
+			tmp_path = kmalloc(PATH_MAX, GFP_KERNEL);
+			if (!tmp_path) {
+				ret = -ENOMEM;
+				kfree(rel_path);
+				goto cleanup;
 			}
 			
 			/* 构造新的相对路径 */
@@ -245,6 +252,7 @@ int ramfs_persist_file(struct file *file)
 			}
 			
 			strcpy(rel_path, tmp_path);
+			kfree(tmp_path);
 			parent = parent->d_parent;
 		}
 		
@@ -254,7 +262,7 @@ int ramfs_persist_file(struct file *file)
 			snprintf(full_path, PATH_MAX, "%s/%s", persist_info->sync_dir, dentry->d_name.name);
 		} else {
 			/* 如果在子目录中 */
-			char *dir_path = kmalloc(PATH_MAX, GFP_KERNEL);
+			dir_path = kmalloc(PATH_MAX, GFP_KERNEL);
 			if (!dir_path) {
 				ret = -ENOMEM;
 				kfree(rel_path);
@@ -265,6 +273,7 @@ int ramfs_persist_file(struct file *file)
 			snprintf(dir_path, PATH_MAX, "%s/%s", persist_info->sync_dir, rel_path);
 			
 			/* 确保目录存在 */
+			printk(KERN_DEBUG "RAMfs: 创建目标目录: %s\n", dir_path);
 			ret = mkdir_p(dir_path, 0755);
 			if (ret < 0) {
 				printk(KERN_ERR "RAMfs: 创建目录 %s 失败: %d\n", dir_path, ret);
@@ -279,25 +288,6 @@ int ramfs_persist_file(struct file *file)
 		}
 		
 		kfree(rel_path);
-	}
-	
-	/* 确保目标文件所在目录存在 */
-	{
-		char *target_dir = kstrdup(full_path, GFP_KERNEL);
-		if (target_dir) {
-			char *last_slash = strrchr(target_dir, '/');
-			if (last_slash) {
-				*last_slash = '\0';
-				printk(KERN_DEBUG "RAMfs: 创建目标目录: %s\n", target_dir);
-				ret = mkdir_p(target_dir, 0755);
-				if (ret < 0) {
-					printk(KERN_ERR "RAMfs: 创建目标目录 %s 失败: %d\n", target_dir, ret);
-					kfree(target_dir);
-					goto cleanup;
-				}
-			}
-			kfree(target_dir);
-		}
 	}
 
 	/* 构造临时文件路径 */
@@ -361,58 +351,53 @@ int ramfs_persist_file(struct file *file)
 	filp_close(temp_file, NULL);
 	temp_file = NULL;
 
-	/* 简化的原子性重命名：直接创建最终文件 */
-	backend_file = filp_open(full_path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-	if (IS_ERR(backend_file)) {
-		ret = PTR_ERR(backend_file);
-		backend_file = NULL;
-		printk(KERN_ERR "RAMfs: 无法创建后端文件 %s: %d\n", full_path, ret);
-		goto cleanup;
-	}
-
-	/* 重新读取临时文件内容写入最终文件 */
-	temp_file = filp_open(temp_path, O_RDONLY, 0);
-	if (IS_ERR(temp_file)) {
-		ret = PTR_ERR(temp_file);
-		temp_file = NULL;
-		printk(KERN_ERR "RAMfs: 无法重新打开临时文件: %d\n", ret);
-		goto cleanup;
-	}
-
-	pos = 0;
-	while (1) {
-		ssize_t bytes_read = kernel_read(temp_file, buffer, buffer_size, &pos);
-		if (bytes_read <= 0) {
-			if (bytes_read < 0)
-				ret = bytes_read;
-			break;
-		}
-
-		bytes_written = kernel_write(backend_file, buffer, bytes_read, 
-					     &backend_file->f_pos);
-		if (bytes_written != bytes_read) {
-			ret = bytes_written < 0 ? bytes_written : -EIO;
-			printk(KERN_ERR "RAMfs: 写入后端文件失败: %d\n", ret);
+	/* 原子性重命名：将临时文件重命名为最终文件 */
+	{
+		struct path temp_rename_path;
+		struct dentry *temp_dentry, *target_dentry;
+		struct inode *dir_inode;
+		int rename_ret;
+		
+		/* 获取临时文件路径 */
+		ret = kern_path(temp_path, 0, &temp_rename_path);
+		if (ret) {
+			printk(KERN_ERR "RAMfs: 无法获取临时文件路径: %d\n", ret);
 			goto cleanup;
 		}
-	}
-
-	/* 关闭后端文件 */
-	filp_close(backend_file, NULL);
-	backend_file = NULL;
-
-	/* 关闭临时文件 */
-	filp_close(temp_file, NULL);
-	temp_file = NULL;
-
-	/* 删除临时文件 */
-	{
-		struct path temp_unlink_path;
-		if (kern_path(temp_path, 0, &temp_unlink_path) == 0) {
-			vfs_unlink(d_inode(temp_unlink_path.dentry->d_parent), 
-				   temp_unlink_path.dentry, NULL);
-			path_put(&temp_unlink_path);
+		
+		temp_dentry = temp_rename_path.dentry;
+		dir_inode = d_inode(temp_dentry->d_parent);
+		
+		/* 在同一目录下查找/创建目标文件的dentry */
+		inode_lock(dir_inode);
+		target_dentry = lookup_one_len(strrchr(full_path, '/') + 1, 
+					       temp_dentry->d_parent, 
+					       strlen(strrchr(full_path, '/') + 1));
+		
+		if (IS_ERR(target_dentry)) {
+			ret = PTR_ERR(target_dentry);
+			inode_unlock(dir_inode);
+			path_put(&temp_rename_path);
+			printk(KERN_ERR "RAMfs: 无法查找目标文件dentry: %d\n", ret);
+			goto cleanup;
 		}
+		
+		/* 执行重命名操作 */
+		rename_ret = vfs_rename(dir_inode, temp_dentry, 
+					dir_inode, target_dentry, 
+					NULL, 0);
+		
+		if (rename_ret) {
+			ret = rename_ret;
+			printk(KERN_ERR "RAMfs: 重命名失败: %d\n", ret);
+		} else {
+			printk(KERN_DEBUG "RAMfs: 原子性重命名成功: %s -> %s\n", 
+			       temp_path, full_path);
+		}
+		
+		dput(target_dentry);
+		inode_unlock(dir_inode);
+		path_put(&temp_rename_path);
 	}
 
 	if (ret == 0) {
@@ -422,8 +407,6 @@ int ramfs_persist_file(struct file *file)
 cleanup:
 	if (temp_file)
 		filp_close(temp_file, NULL);
-	if (backend_file)
-		filp_close(backend_file, NULL);
 	
 	/* 如果失败，清理临时文件 */
 	if (ret < 0 && temp_path) {

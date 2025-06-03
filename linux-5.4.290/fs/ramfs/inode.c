@@ -44,8 +44,6 @@
 #include <linux/path.h>
 #include "internal.h"
 
-/* ramfs_mount_opts 和 ramfs_fs_info 已在 internal.h 中定义 */
-
 #define RAMFS_DEFAULT_MODE	0755
 
 static const struct super_operations ramfs_ops;
@@ -308,39 +306,26 @@ static struct file_system_type ramfs_fs_type = {
 	.fs_flags	= FS_USERNS_MOUNT,
 };
 
-/**
- * ramfs_bind_instance - 设置特定RAMfs实例的后端同步目录
- * @fsi: RAMfs实例信息
- * @sync_dir: 后端同步目录路径
- * 
- * 返回值: 成功返回0，失败返回负错误码
- */
+
 int ramfs_bind_instance(struct ramfs_fs_info *fsi, const char *sync_dir)
 {
 	char *new_dir;
 	struct path path;
 	int ret;
 
-	if (!fsi || !sync_dir)
-		return -EINVAL;
+	if (!fsi || !sync_dir) return -EINVAL;
 
-	/* 检查目录是否存在 */
 	ret = kern_path(sync_dir, LOOKUP_FOLLOW, &path);
-	if (ret)
-		return ret;
+	if (ret) return ret;
 	path_put(&path);
 
-	/* 分配新的目录字符串 */
 	new_dir = kstrdup(sync_dir, GFP_KERNEL);
-	if (!new_dir)
-		return -ENOMEM;
+	if (!new_dir) return -ENOMEM;
 
 	mutex_lock(&fsi->persist_info.sync_mutex);
 	
-	/* 释放旧的目录字符串 */
 	kfree(fsi->persist_info.sync_dir);
 	
-	/* 设置新的同步目录 */
 	fsi->persist_info.sync_dir = new_dir;
 	fsi->persist_info.enabled = true;
 	
@@ -351,15 +336,8 @@ int ramfs_bind_instance(struct ramfs_fs_info *fsi, const char *sync_dir)
 }
 EXPORT_SYMBOL(ramfs_bind_instance);
 
-/* 
- * 注意: 多实例支持使用挂载参数而不是全局procfs接口
- * 用法: mount -t ramfs -o persist_dir=/tmp/backend none /mnt/ramfs
- */
-
 static int __init init_ramfs_fs(void)
 {
 	return register_filesystem(&ramfs_fs_type);
 }
 fs_initcall(init_ramfs_fs);
-
-/* RAMfs是内置的，不需要cleanup函数 */
