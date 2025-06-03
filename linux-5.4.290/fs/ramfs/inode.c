@@ -165,10 +165,9 @@ static int ramfs_show_options(struct seq_file *m, struct dentry *root)
 	if (fsi->mount_opts.mode != RAMFS_DEFAULT_MODE)
 		seq_printf(m, ",mode=%o", fsi->mount_opts.mode);
 	
-	/* 显示持久化目录参数 */
-	if (fsi->persist_info.enabled && fsi->persist_info.sync_dir)
+	if (fsi->persist_info.enabled && fsi->persist_info.sync_dir) {
 		seq_printf(m, ",persist_dir=%s", fsi->persist_info.sync_dir);
-		
+	}
 	return 0;
 }
 
@@ -218,11 +217,9 @@ static int ramfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		fsi->mount_opts.mode = result.uint_32 & S_IALLUGO;
 		break;
 	case Opt_persist_dir:
-		/* 设置持久化目录 */
 		kfree(fsi->persist_info.sync_dir);
 		fsi->persist_info.sync_dir = kstrdup(param->string, GFP_KERNEL);
-		if (!fsi->persist_info.sync_dir)
-			return -ENOMEM;
+		if (!fsi->persist_info.sync_dir) return -ENOMEM;
 		fsi->persist_info.enabled = true;
 		break;
 	}
@@ -276,7 +273,6 @@ int ramfs_init_fs_context(struct fs_context *fc)
 
 	fsi->mount_opts.mode = RAMFS_DEFAULT_MODE;
 	
-	/* 初始化持久化信息 */
 	mutex_init(&fsi->persist_info.sync_mutex);
 	fsi->persist_info.enabled = false;
 	fsi->persist_info.sync_dir = NULL;
@@ -291,7 +287,6 @@ static void ramfs_kill_sb(struct super_block *sb)
 	struct ramfs_fs_info *fsi = sb->s_fs_info;
 	
 	if (fsi) {
-		/* 清理持久化资源 */
 		kfree(fsi->persist_info.sync_dir);
 		kfree(fsi);
 	}
