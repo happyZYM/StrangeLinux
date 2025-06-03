@@ -5,14 +5,15 @@ import errno
 import pyfuse3
 import trio
 import time
-import logging
 import asyncio
 from pyfuse3 import FUSEError, invalidate_entry, invalidate_inode
 from openai import AsyncOpenAI
 from collections import defaultdict
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+from loguru import logger
+logging_level = os.getenv("LOGGING_LEVEL", "TRACE")
+logger.remove()  # Remove the default handler
+logger.add(sys.stderr, level=logging_level)  # Add new handler with specified level
 
 client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
@@ -113,6 +114,7 @@ class GPTfs(pyfuse3.Operations):
             name_bytes = os.fsencode(name)  # convert str to bytes
             attr = await self.getattr(child_inode)  # get attributes
             if not pyfuse3.readdir_reply(token, name_bytes, attr, i+1):
+                logger.warning(f"readdir: failed to reply to readdir request, token={token}, name={name}, child_inode={child_inode}, i={i}")
                 break
         
         return
@@ -120,7 +122,7 @@ class GPTfs(pyfuse3.Operations):
     async def mkdir(self, parent_inode, name, mode, ctx):
         """create directory (create a new conversation session)"""
         if parent_inode != pyfuse3.ROOT_INODE:
-            logger.debug(f"mkdir: try to create directory under non-root directory {parent_inode}")
+            logger.debug(f"mkdir: try to create directory under non-root directory {parent_inode}, which is not supported")
             raise FUSEError(errno.EPERM)  # only allow creating session directory under root
         
         name_str = os.fsdecode(name)  # convert bytes to str
@@ -478,13 +480,13 @@ if __name__ == '__main__':
         print(f"Error: mount point {mountpoint} does not exist or is not a directory")
         sys.exit(1)
     
-    logging.info(f"start to mount GPT file system to {mountpoint}")
+    logger.info(f"start to mount GPT file system to {mountpoint}")
     try:
         trio.run(main, mountpoint)
     except KeyboardInterrupt:
-        logging.info("received interrupt signal, unmounting file system...")
+        logger.info("received interrupt signal, unmounting file system...")
     except Exception as e:
-        logging.error(f"error: {e}", exc_info=True)
+        logger.error(f"error: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        logging.info("GPT file system has been unmounted")
+        logger.info("GPT file system has been unmounted")
