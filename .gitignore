@@ -8,3 +8,4 @@ playground/
 .clinerules
 .cursorrules
 /tools/config/edk2/.AutoGenIdFile.txt
+/tcpdump-4.99.5/
