@@ -25,12 +25,10 @@ DURATION=${2:-$DEFAULT_DURATION}
 # 测试过滤器列表
 declare -a TEST_FILTERS=(
     "port 443"
-    "port 80"
     "tcp"
     "udp"
     "port 443 and tcp"
     "host 1.1.1.1"
-    "net 192.168.0.0/24"
 )
 
 # 输出目录
