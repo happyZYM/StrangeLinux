@@ -36,6 +36,7 @@
 #include <linux/pagemap.h>
 #include <linux/highmem.h>
 #include <linux/mount.h>
+#include <linux/fcntl.h>
 
 #include "internal.h"
 
@@ -52,93 +53,74 @@ static unsigned long ramfs_mmu_get_unmapped_area(struct file *file,
 	return current->mm->get_unmapped_area(file, addr, len, pgoff, flags);
 }
 
-static int create_single_dir(const char *path, umode_t mode)
+static int dev_mkdir(const char *name, umode_t mode)
 {
-	struct path parent;
-	int error;
-	
-	error = kern_path(path, LOOKUP_DIRECTORY, &parent);
-	if (!error) {
-		path_put(&parent);
-		return 0;
-	}
-	
-	{
-		char *tmp_path = kstrdup(path, GFP_KERNEL);
-		char *name, *parent_path;
-		
-		if (!tmp_path) return -ENOMEM;
-		
-		name = strrchr(tmp_path, '/');
-		if (!name) {
-			kfree(tmp_path);
-			return -EINVAL;
-		}
-		
-		*name = '\0';
-		name++;
-		parent_path = tmp_path;
-		
-		if (parent_path[0] == '\0') parent_path = "/";
-		
-		error = kern_path(parent_path, LOOKUP_DIRECTORY, &parent);
-		if (error) {
-			kfree(tmp_path);
-			return error;
-		}
-		
-		{
-			struct dentry *child;
-			struct inode *dir = d_inode(parent.dentry);
-			
-			inode_lock(dir);
-			child = lookup_one_len(name, parent.dentry, strlen(name));
-			if (IS_ERR(child)) {
-				error = PTR_ERR(child);
-			} else {
-				error = vfs_mkdir(dir, child, mode);
-				dput(child);
+	struct dentry *dentry;
+	struct path path;
+	int err;
+
+	dentry = kern_path_create(AT_FDCWD, name, &path, LOOKUP_DIRECTORY);
+	if (IS_ERR(dentry)) {
+		err = PTR_ERR(dentry);
+		/* If the directory already exists, that's fine */
+		if (err == -EEXIST) {
+			struct path existing_path;
+			err = kern_path(name, LOOKUP_DIRECTORY, &existing_path);
+			if (!err) {
+				path_put(&existing_path);
+				return 0; /* Directory exists, success */
 			}
-			inode_unlock(dir);
 		}
-		
-		if (error == -EEXIST) error = 0;
-		
-		path_put(&parent);
-		kfree(tmp_path);
+		return err;
 	}
-	
-	return error;
+
+	err = vfs_mkdir(d_inode(path.dentry), dentry, mode);
+	done_path_create(&path, dentry);
+	return err;
 }
 
-static int mkdir_p(const char *path, umode_t mode)
+static int mkdir_p(const char *nodepath, umode_t mode)
 {
-	char *tmp_path, *p;
-	int error = 0;
+	char *path;
+	char *s;
+	int err = 0;
+
+	if (!nodepath || !*nodepath)
+		return 0;
+
+	/* parent directories do not exist, create them */
+	path = kstrdup(nodepath, GFP_KERNEL);
+	if (!path)
+		return -ENOMEM;
+
+	s = path;
+	/* Skip leading slash */
+	if (*s == '/')
+		s++;
 	
-	if (!path || !*path || (path[0] == '/' && !path[1])) return 0;
-	
-	tmp_path = kstrdup(path, GFP_KERNEL);
-	if (!tmp_path) return -ENOMEM;
-	
-	p = tmp_path;
-	if (*p == '/') p++;
-	
-	while ((p = strchr(p, '/'))) {
-		*p = '\0';
-		error = create_single_dir(tmp_path, mode);
-		if (error && error != -EEXIST) {
-			printk(KERN_ERR "RAMfs: 创建目录 %s 失败: %d\n", tmp_path, error);
+	for (;;) {
+		s = strchr(s, '/');
+		if (!s)
 			break;
+		s[0] = '\0';
+		if (strlen(path) > 0) { /* Don't try to create empty path */
+			err = dev_mkdir(path, mode);
+			if (err && err != -EEXIST)
+				break;
 		}
-		*p = '/';
-		p++;
+		s[0] = '/';
+		s++;
 	}
 	
-	if (!error) error = create_single_dir(tmp_path, mode);
+	/* Create the final directory */
+	if (!err && strlen(path) > 0) {
+		err = dev_mkdir(path, mode);
+		if (err == -EEXIST)
+			err = 0;
+	}
 	
-	kfree(tmp_path);
-	return error;
+	kfree(path);
+	return err;
 }
 
 int ramfs_persist_file(struct file *file)
@@ -235,12 +217,13 @@ int ramfs_persist_file(struct file *file)
 			
 			printk(KERN_DEBUG "RAMfs: 创建目标目录: %s\n", dir_path);
 			ret = mkdir_p(dir_path, 0755);
-			if (ret < 0) {
+			if (ret < 0 && ret != -EEXIST) {
 				printk(KERN_ERR "RAMfs: 创建目录 %s 失败: %d\n", dir_path, ret);
 				kfree(dir_path);
 				kfree(rel_path);
 				goto cleanup;
 			}
+			ret = 0; /* Reset ret as directory creation is successful */
 			
 			snprintf(full_path, PATH_MAX, "%s/%s", dir_path, dentry->d_name.name);
 			kfree(dir_path);
