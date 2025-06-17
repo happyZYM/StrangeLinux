@@ -68,6 +68,28 @@ for file in "${PROG_DIR}"/*; do
     fi
 done
 
+# 创建必要的lib目录
+mkdir -p "${INITRAMFS_DIR}/lib"
+mkdir -p "${INITRAMFS_DIR}/lib64"
+mkdir -p "${INITRAMFS_DIR}/usr/lib"
+
+# 复制关键的系统库
+# 查找并复制libgcc_s.so.1
+LIBGCC_PATH=$(find /usr/lib* /lib* -name "libgcc_s.so.1" 2>/dev/null | head -1)
+if [ -n "$LIBGCC_PATH" ]; then
+    cp "$LIBGCC_PATH" "${INITRAMFS_DIR}/lib/libgcc_s.so.1"
+    echo "复制 libgcc_s.so.1 从 $LIBGCC_PATH"
+else
+    echo "警告：未找到 libgcc_s.so.1"
+fi
+
+# 复制pthread库
+LIBPTHREAD_PATH=$(find /usr/lib* /lib* -name "libpthread.so.0" 2>/dev/null | head -1)
+if [ -n "$LIBPTHREAD_PATH" ]; then
+    cp "$LIBPTHREAD_PATH" "${INITRAMFS_DIR}/lib/libpthread.so.0"
+    echo "复制 libpthread.so.0 从 $LIBPTHREAD_PATH"
+fi
+
 # 创建init脚本
 cat > "${INITRAMFS_DIR}/init" << 'EOF'
 #!/bin/busybox sh
@@ -90,10 +112,11 @@ sleep 1
 # mknod /dev/ttyS0 c 4 64
 
 # 设置基本的环境变量
-export PATH=/bin
+export PATH=/bin:/usr/bin
 export HOME=/root
 export TERM=vt100
 export PS1='[\\w]\\$ '
+export LD_LIBRARY_PATH=/lib:/lib64:/usr/lib:/usr/lib64
 
 echo "文件系统挂载完成"
 echo "当前挂载点："

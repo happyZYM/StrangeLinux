@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g
 BUILD_DIR = /tmp/mem_test
-TARGETS = $(BUILD_DIR)/mem1 $(BUILD_DIR)/mem2 ../build/prog/ramfs_persist_test
+TARGETS = $(BUILD_DIR)/mem1 $(BUILD_DIR)/mem2 ../build/prog/ramfs_persist_test ../build/prog/mem_official_1 ../build/prog/mem_official_2 ../build/prog/mem_official_3
 
 .PHONY: all clean test test-mem1 test-mem1-sudo test-mem2 test-with-sudo setup
 
@@ -10,6 +10,8 @@ all: setup $(TARGETS)
 setup:
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p ../build/prog
+	@cp ./setup.sh ../build/prog/ramfs_setup.sh
+	@chmod +x ../build/prog/ramfs_setup.sh
 
 $(BUILD_DIR)/mem1: mem1.c | setup
 	$(CC) $(CFLAGS) -o $@ $<
@@ -19,6 +21,15 @@ $(BUILD_DIR)/mem2: mem2.c | setup
 
 ../build/prog/ramfs_persist_test: ramfs_persist_test.c | setup
 	$(CC) $(CFLAGS) -o $@ $< -lpthread
+
+../build/prog/mem_official_1: mem_official_1.c | setup
+	$(CC) $(CFLAGS) -o $@ $<
+
+../build/prog/mem_official_2: mem_official_2.c | setup
+	$(CC) $(CFLAGS) -o $@ $<
+
+../build/prog/mem_official_3: mem_official_3.c | setup
+	$(CC) $(CFLAGS) -o $@ $<
 
 # 单独测试mem1（虚拟内存重映射）
 test-mem1: $(BUILD_DIR)/mem1
