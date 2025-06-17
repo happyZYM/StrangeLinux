@@ -22,6 +22,50 @@
 #include <net/busy_poll.h>
 #include <net/pkt_sched.h>
 
+/* Per-process socket limit */
+int sysctl_socket_limit_per_process __read_mostly = 1024;
+EXPORT_SYMBOL(sysctl_socket_limit_per_process);
+
+/* Per-process socket limit functions */
+int socket_limit_check_and_inc(struct task_struct *task)
+{
+	int current_count;
+	struct task_struct *leader;
+	if (!task) {
+		task = current;
+	}
+	leader = task->group_leader;
+	current_count = atomic_read(&leader->socket_count);
+	if (current_count >= sysctl_socket_limit_per_process) {
+		return -EMFILE;
+	}
+	atomic_inc(&leader->socket_count);
+	return 0;
+}
+EXPORT_SYMBOL(socket_limit_check_and_inc);
+
+void socket_limit_dec(struct task_struct *task)
+{
+	struct task_struct *leader;
+	if (!task) {
+		task = current;
+	}
+	leader = task->group_leader;
+	atomic_dec(&leader->socket_count);
+}
+EXPORT_SYMBOL(socket_limit_dec);
+
+int socket_limit_get_count(struct task_struct *task)
+{
+	struct task_struct *leader;
+	if (!task) {
+		task = current;
+	}
+	leader = task->group_leader;
+	return atomic_read(&leader->socket_count);
+}
+EXPORT_SYMBOL(socket_limit_get_count);
+
 static int two __maybe_unused = 2;
 static int min_sndbuf = SOCK_MIN_SNDBUF;
 static int min_rcvbuf = SOCK_MIN_RCVBUF;
@@ -576,6 +620,14 @@ static struct ctl_table net_core_table[] = {
 		.procname	= "gro_normal_batch",
 		.data		= &gro_normal_batch,
 		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ONE,
+	},
+	{
+		.procname	= "socket_limit_per_process",
+		.data		= &sysctl_socket_limit_per_process,
+		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ONE,

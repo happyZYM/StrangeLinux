@@ -1,0 +1,44 @@
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c99 -pthread
+BUILD_DIR = ../build/prog
+
+# 测试程序列表
+TESTS = test_socket_limit_basic test_socket_limit_sysctl test_socket_limit_thread
+
+# 目标文件
+TARGETS = $(addprefix $(BUILD_DIR)/, $(TESTS))
+
+.PHONY: all clean test
+
+all: $(BUILD_DIR) $(TARGETS)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/test_socket_limit_basic: test_socket_limit_basic.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(BUILD_DIR)/test_socket_limit_sysctl: test_socket_limit_sysctl.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(BUILD_DIR)/test_socket_limit_thread: test_socket_limit_thread.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+clean:
+	rm -f $(TARGETS)
+
+# 运行所有测试的便捷目标
+test: all
+	@echo "=== Running Socket Limit Tests ==="
+	@echo "Note: These tests require root privileges to modify sysctl parameters"
+	@echo
+	@echo "1. Basic socket limit test:"
+	@$(BUILD_DIR)/test_socket_limit_basic
+	@echo
+	@echo "2. Sysctl modification test:"
+	@$(BUILD_DIR)/test_socket_limit_sysctl
+	@echo
+	@echo "3. Thread sharing test:"
+	@$(BUILD_DIR)/test_socket_limit_thread
+	@echo
+	@echo "=== All tests completed ===" 

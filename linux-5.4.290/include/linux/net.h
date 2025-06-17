@@ -344,4 +344,11 @@ u32 kernel_sock_ip_overhead(struct sock *sk);
 #define MODULE_ALIAS_NET_PF_PROTO_NAME(pf, proto, name) \
 	MODULE_ALIAS("net-pf-" __stringify(pf) "-proto-" __stringify(proto) \
 		     name)
+
+/* Per-process socket limit functions */
+extern int sysctl_socket_limit_per_process;
+int socket_limit_check_and_inc(struct task_struct *task);
+void socket_limit_dec(struct task_struct *task);
+int socket_limit_get_count(struct task_struct *task);
+
 #endif	/* _LINUX_NET_H */

@@ -1959,6 +1959,8 @@ static __latent_entropy struct task_struct *copy_process(
 	posix_cputimers_init(&p->posix_cputimers);
 
 	p->io_context = NULL;
+	/* Initialize per-process socket count */
+	atomic_set(&p->socket_count, 0);
 	audit_set_context(p, NULL);
 	cgroup_fork(p);
 #ifdef CONFIG_NUMA

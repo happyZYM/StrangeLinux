@@ -1041,6 +1041,9 @@ struct task_struct {
 
 	struct io_context		*io_context;
 
+	/* Socket count for per-process socket limit */
+	atomic_t			socket_count;
+
 #ifdef CONFIG_COMPACTION
 	struct capture_control		*capture_control;
 #endif

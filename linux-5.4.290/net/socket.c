@@ -554,10 +554,19 @@ struct socket *sock_alloc(void)
 {
 	struct inode *inode;
 	struct socket *sock;
+	int err;
+
+	/* Check per-process socket limit before allocating */
+	err = socket_limit_check_and_inc(current);
+	if (err) {
+		return NULL;
+	}
 
 	inode = new_inode_pseudo(sock_mnt->mnt_sb);
-	if (!inode)
+	if (!inode) {
+		socket_limit_dec(current);  /* Decrement on allocation failure */
 		return NULL;
+	}
 
 	sock = SOCKET_I(inode);
 
@@ -582,6 +591,9 @@ EXPORT_SYMBOL(sock_alloc);
 
 static void __sock_release(struct socket *sock, struct inode *inode)
 {
+	/* Decrement per-process socket count when releasing socket */
+	socket_limit_dec(current);
+	
 	if (sock->ops) {
 		struct module *owner = sock->ops->owner;
 
