@@ -73,9 +73,5 @@ int main(int argc, char *argv[]) {
     //     printf("verification successful: xattr %s has been removed\n", attr_name);
     // }
     
-    // // clean up
-    // unlink(filepath);
-    // printf("test file removed\n");
-    
     return 0;
 }
