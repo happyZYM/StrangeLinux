@@ -40,7 +40,6 @@ class GPTfs(pyfuse3.Operations):
         self.directories = defaultdict(dict)
         # track file open status and flags
         self.open_files = {}
-        # create root directory
         self.create_root()
 
     def create_root(self):
@@ -112,7 +111,7 @@ class GPTfs(pyfuse3.Operations):
         # return directory entries starting from offset
         for i, (name, child_inode) in enumerate(entries[off:], off):
             name_bytes = os.fsencode(name)  # convert str to bytes
-            attr = await self.getattr(child_inode)  # get attributes
+            attr = await self.getattr(child_inode)
             if not pyfuse3.readdir_reply(token, name_bytes, attr, i+1):
                 logger.warning(f"readdir: failed to reply to readdir request, token={token}, name={name}, child_inode={child_inode}, i={i}")
                 break
@@ -130,12 +129,10 @@ class GPTfs(pyfuse3.Operations):
             logger.debug(f"mkdir: directory {name_str} already exists")
             raise FUSEError(errno.EEXIST)
         
-        # create session directory
         inode = self._create_node(NodeType.DIR, mode)
         self.directories[parent_inode][name_str] = inode
         self.directories[inode] = {}
         
-        # create input, output and error files in session directory
         try:
             self._create_session_files(inode)
             logger.debug(f"mkdir: create session directory {name_str}, inode={inode}, and created session files")
@@ -147,17 +144,14 @@ class GPTfs(pyfuse3.Operations):
 
     def _create_session_files(self, session_inode):
         """create necessary files in session directory"""
-        # create input file
         input_inode = self._create_node(NodeType.FILE, stat.S_IFREG | 0o644)
         self.directories[session_inode]['input'] = input_inode
         logger.debug(f"created input file in session {session_inode}, inode={input_inode}")
         
-        # create output file
         output_inode = self._create_node(NodeType.FILE, stat.S_IFREG | 0o644)
         self.directories[session_inode]['output'] = output_inode
         logger.debug(f"created output file in session {session_inode}, inode={output_inode}")
         
-        # create error file
         error_inode = self._create_node(NodeType.FILE, stat.S_IFREG | 0o644)
         self.directories[session_inode]['error'] = error_inode
         logger.debug(f"created error file in session {session_inode}, inode={error_inode}")
@@ -243,7 +237,6 @@ class GPTfs(pyfuse3.Operations):
             logger.debug(f"write: invalid file handle {fh}")
             raise FUSEError(errno.EINVAL)
         
-        # update file content
         data = self.data[fh]
         
         # if this is the first write and the file should be truncated, ignore the offset
@@ -259,30 +252,25 @@ class GPTfs(pyfuse3.Operations):
                 data = data[:off] + buf + data[off+len(buf):]
             self.data[fh] = data
         
-        # update file size
         self.nodes[fh][1].st_size = len(self.data[fh])
         self.nodes[fh][1].st_mtime_ns = int(time.time() * 1e9)
         
         logger.debug(f"write: write {len(buf)} bytes to file {fh}, offset {off}, new size: {len(self.data[fh])}")
         
-        # if this is input file, process GPT request
         try:
             if self._is_input_file(fh):
                 logger.debug(f"write: detected writing to input file, prepare to trigger GPT request")
                 session_inode = self._find_session_inode(fh)
                 if session_inode:
-                    # use background task to process request, avoid blocking write call
                     trio.lowlevel.spawn_system_task(self._process_gpt_request, session_inode)
                     logger.debug(f"write: triggered GPT request processing in background")
         except Exception as e:
             logger.error(f"failed to trigger GPT request: {e}", exc_info=True)
-            # do not raise exception, write operation itself still succeeds
         
         return len(buf)
     
     def _is_input_file(self, inode):
         """check if this is input file"""
-        # traverse directory to find input file
         for dir_inode, entries in self.directories.items():
             if 'input' in entries and entries['input'] == inode:
                 return True
@@ -290,7 +278,6 @@ class GPTfs(pyfuse3.Operations):
     
     def _is_output_file(self, inode):
         """check if this is output file"""
-        # traverse directory to find output file
         for dir_inode, entries in self.directories.items():
             if 'output' in entries and entries['output'] == inode:
                 return True
@@ -306,13 +293,11 @@ class GPTfs(pyfuse3.Operations):
     async def _invalidate_cache(self, inode):
         """invalidate cache for specified inode"""
         try:
-            # check if inode is valid
             if inode not in self.nodes:
                 logger.debug(f"_invalidate_cache: skipping invalidation for non-existent inode {inode}")
                 return
                 
             logger.debug(f"_invalidate_cache: invalidate cache for node {inode}")
-            # use try/except to handle possible errors
             try:
                 result = pyfuse3.invalidate_inode(inode)
                 if result is not None:  # only await when return value is not None
@@ -333,12 +318,10 @@ class GPTfs(pyfuse3.Operations):
             output_inode = entries['output']
             error_inode = entries['error']
             
-            # get user input
             prompt = self.data[input_inode].decode('utf-8', errors='replace')
             logger.debug(f"_process_gpt_request: user input: {prompt[:50]}...")
             
             try:
-                # call OpenAI API
                 logger.debug("_process_gpt_request: calling OpenAI API...")
                 response = await client.chat.completions.create(
                     model=model_name,
@@ -347,26 +330,21 @@ class GPTfs(pyfuse3.Operations):
                     ]
                 )
                 
-                # get reply text
                 gpt_response = response.choices[0].message.content
                 logger.debug(f"_process_gpt_request: got API response: {gpt_response[:50]}...")
                 
-                # write to output file
                 self.data[output_inode] = gpt_response.encode('utf-8')
                 self.nodes[output_inode][1].st_size = len(self.data[output_inode])
                 self.nodes[output_inode][1].st_mtime_ns = int(time.time() * 1e9)
                 logger.debug("_process_gpt_request: updated output file")
                 
-                # clear error file
                 self.data[error_inode] = b''
                 self.nodes[error_inode][1].st_size = 0
                 self.nodes[error_inode][1].st_mtime_ns = int(time.time() * 1e9)
                 
-                # invalidate cache, ensure new content can be read immediately
                 await self._invalidate_cache(output_inode)
                 await self._invalidate_cache(error_inode)
                 
-                # find session directory name, for logging
                 session_name = "unknown session"
                 for name, inode in self.directories[pyfuse3.ROOT_INODE].items():
                     if inode == session_inode:
@@ -376,14 +354,12 @@ class GPTfs(pyfuse3.Operations):
                 logger.info(f"GPT request processed successfully, session: {session_name}")
                 
             except Exception as e:
-                # write to error file
                 error_msg = f"Error: {str(e)}"
                 logger.error(f"_process_gpt_request: failed to process GPT request: {e}", exc_info=True)
                 self.data[error_inode] = error_msg.encode('utf-8')
                 self.nodes[error_inode][1].st_size = len(self.data[error_inode])
                 self.nodes[error_inode][1].st_mtime_ns = int(time.time() * 1e9)
                 
-                # invalidate cache for error file
                 await self._invalidate_cache(error_inode)
         except Exception as e:
             logger.error(f"_process_gpt_request: failed to process GPT request: {e}", exc_info=True)
