@@ -1,0 +1,3 @@
+[submodule "net/NCCL-playground"]
+	path = net/NCCL-playground
+	url = https://github.com/happyZYM/NCCL-playground.git
