@@ -117,12 +117,6 @@ struct ramfs_state {
     fuse_ino_t next_ino;          /* Next available inode number */
     pthread_mutex_t ino_lock;     /* Lock for inode allocation */
     
-    /* Memory management */
-    struct ramfs_block **free_blocks; /* Free block pool */
-    size_t free_block_count;      /* Number of free blocks */
-    size_t total_blocks;          /* Total allocated blocks */
-    pthread_mutex_t block_lock;   /* Block allocation lock */
-    
     /* Inode hash table for fast lookup */
     struct inode_hash_table *inode_table; /* Hash table of inodes */
 };
@@ -368,23 +362,18 @@ static int ramfs_init_state(void) {
     if (!ramfs_state) return -1;
     
     /* Initialize locks */
-    if (pthread_mutex_init(&ramfs_state->ino_lock, NULL) != 0 ||
-        pthread_mutex_init(&ramfs_state->block_lock, NULL) != 0) {
+    if (pthread_mutex_init(&ramfs_state->ino_lock, NULL) != 0) {
         free(ramfs_state);
         return -1;
     }
     
     /* Initialize basic state */
     ramfs_state->next_ino = 2; /* Root is 1 */
-    ramfs_state->free_blocks = NULL;
-    ramfs_state->free_block_count = 0;
-    ramfs_state->total_blocks = 0;
     
     /* Create hash table */
     ramfs_state->inode_table = inode_hash_table_create(HASH_TABLE_INITIAL_SIZE);
     if (!ramfs_state->inode_table) {
         pthread_mutex_destroy(&ramfs_state->ino_lock);
-        pthread_mutex_destroy(&ramfs_state->block_lock);
         free(ramfs_state);
         return -1;
     }
@@ -394,11 +383,11 @@ static int ramfs_init_state(void) {
     if (!ramfs_state->root) {
         inode_hash_table_destroy(ramfs_state->inode_table);
         pthread_mutex_destroy(&ramfs_state->ino_lock);
-        pthread_mutex_destroy(&ramfs_state->block_lock);
         free(ramfs_state);
         return -1;
     }
     ramfs_state->root->ino = 1; /* Root inode is always 1 */
+	ramfs_state->root->nlink=2;
     
     return 0;
 }
@@ -809,7 +798,7 @@ static void ramfs_ll_getattr(fuse_req_t req, fuse_ino_t ino,
     
     pthread_rwlock_unlock(&inode->lock);
     
-		fuse_reply_attr(req, &stbuf, 1.0);
+	fuse_reply_attr(req, &stbuf, 1.0);
 }
 
 static void ramfs_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
@@ -839,10 +828,10 @@ static void ramfs_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     
     /* Prepare entry response */
     struct fuse_entry_param e;
-		memset(&e, 0, sizeof(e));
+	memset(&e, 0, sizeof(e));
     e.ino = child_inode->ino;
-		e.attr_timeout = 1.0;
-		e.entry_timeout = 1.0;
+	e.attr_timeout = 1.0;
+	e.entry_timeout = 1.0;
     
     /* Fill stat info */
     pthread_rwlock_rdlock(&child_inode->lock);
@@ -859,7 +848,7 @@ static void ramfs_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     e.attr.st_blocks = (child_inode->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
     pthread_rwlock_unlock(&child_inode->lock);
 
-		fuse_reply_entry(req, &e);
+	fuse_reply_entry(req, &e);
 }
 
 /* Directory buffer for readdir */
@@ -884,11 +873,12 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name,
 
 static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
                              off_t off, size_t maxsize) {
-	if (off < bufsize)
+	if (off < bufsize) {
 		return fuse_reply_buf(req, buf + off,
 				      min(bufsize - off, maxsize));
-	else
+	} else {
 		return fuse_reply_buf(req, NULL, 0);
+	}
 }
 
 static void ramfs_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
@@ -907,7 +897,7 @@ static void ramfs_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     }
 
     struct dirbuf b;
-		memset(&b, 0, sizeof(b));
+	memset(&b, 0, sizeof(b));
     
     /* Add . and .. entries */
     dirbuf_add(req, &b, ".", ino);
@@ -922,9 +912,9 @@ static void ramfs_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     }
     pthread_rwlock_unlock(&inode->dir_entries->lock);
     
-		reply_buf_limited(req, b.p, b.size, off, size);
-		free(b.p);
-	}
+    reply_buf_limited(req, b.p, b.size, off, size);
+    free(b.p);
+}
 
 static void ramfs_ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
                            mode_t mode) {
@@ -965,6 +955,7 @@ static void ramfs_ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     pthread_rwlock_wrlock(&parent_inode->lock);
     parent_inode->mtime = time(NULL);
     parent_inode->nlink++; /* Directories increase parent link count */
+	new_inode->nlink=2;
     pthread_rwlock_unlock(&parent_inode->lock);
     
     /* Prepare response */
@@ -992,7 +983,7 @@ static void ramfs_ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
 }
 
 static void ramfs_ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
-                           mode_t mode, dev_t rdev) {
+                           mode_t mode, dev_t rdev) { /* just normal file, no special files*/
     (void)rdev; /* We don't support device files */
     
     struct ramfs_inode *parent_inode = ramfs_inode_get(parent);
@@ -1182,7 +1173,7 @@ static void ramfs_ll_open(fuse_req_t req, fuse_ino_t ino,
         return;
     }
     
-		fuse_reply_open(req, fi);
+	fuse_reply_open(req, fi);
 }
 
 static void ramfs_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
@@ -1349,8 +1340,8 @@ static void ramfs_ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
         pthread_rwlock_unlock(&child_inode->lock);
     }
     
-		fuse_reply_err(req, 0);
-	}
+	fuse_reply_err(req, 0);
+}
 
 static void ramfs_ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
     struct ramfs_inode *parent_inode = ramfs_inode_get(parent);
@@ -1408,8 +1399,8 @@ static void ramfs_ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) 
     /* Destroy the directory inode */
     ramfs_inode_destroy(child_inode);
     
-		fuse_reply_err(req, 0);
-	}
+	fuse_reply_err(req, 0);
+}
 
 static void ramfs_ll_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent,
                           const char *newname) {
@@ -1753,96 +1744,6 @@ static void ramfs_ll_fsync(fuse_req_t req, fuse_ino_t ino, int datasync,
     fuse_reply_err(req, 0);
 }
 
-/* Extended attributes - simple implementation */
-static void ramfs_ll_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
-                             size_t size) {
-    struct ramfs_inode *inode = ramfs_inode_get(ino);
-    if (!inode) {
-        fuse_reply_err(req, ENOENT);
-        return;
-    }
-    
-    /* For demonstration, support a simple test attribute */
-    if (strcmp(name, "user.ramfs.test") == 0) {
-        const char *value = "ramfs_test_value";
-        size_t value_len = strlen(value);
-        
-        if (size == 0) {
-            /* Return size of attribute */
-            fuse_reply_xattr(req, value_len);
-        } else if (size >= value_len) {
-            /* Return attribute value */
-            fuse_reply_buf(req, value, value_len);
-        } else {
-            /* Buffer too small */
-            fuse_reply_err(req, ERANGE);
-        }
-    } else {
-        fuse_reply_err(req, ENODATA);
-    }
-}
-
-static void ramfs_ll_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
-                             const char *value, size_t size, int flags) {
-    (void)flags;
-    
-    struct ramfs_inode *inode = ramfs_inode_get(ino);
-    if (!inode) {
-        fuse_reply_err(req, ENOENT);
-        return;
-    }
-    
-    /* For demonstration, only accept our test attribute */
-    if (strcmp(name, "user.ramfs.test") == 0) {
-        const char *expected = "ramfs_test_value";
-        if (size == strlen(expected) && strncmp(value, expected, size) == 0) {
-            fuse_reply_err(req, 0);
-        } else {
-            fuse_reply_err(req, EINVAL);
-        }
-    } else {
-        fuse_reply_err(req, ENOTSUP);
-    }
-}
-
-static void ramfs_ll_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
-    struct ramfs_inode *inode = ramfs_inode_get(ino);
-    if (!inode) {
-        fuse_reply_err(req, ENOENT);
-        return;
-    }
-    
-    /* For demonstration, only support removing our test attribute */
-    if (strcmp(name, "user.ramfs.test") == 0) {
-        fuse_reply_err(req, 0);
-    } else {
-        fuse_reply_err(req, ENODATA);
-    }
-}
-
-static void ramfs_ll_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
-    struct ramfs_inode *inode = ramfs_inode_get(ino);
-    if (!inode) {
-        fuse_reply_err(req, ENOENT);
-        return;
-    }
-    
-    /* For demonstration, list our test attribute */
-    const char *list = "user.ramfs.test\0";
-    size_t list_len = strlen("user.ramfs.test") + 1;
-    
-    if (size == 0) {
-        /* Return size of list */
-        fuse_reply_xattr(req, list_len);
-    } else if (size >= list_len) {
-        /* Return attribute list */
-        fuse_reply_buf(req, list, list_len);
-    } else {
-        /* Buffer too small */
-        fuse_reply_err(req, ERANGE);
-    }
-}
-
 static void ramfs_ll_init(void *userdata, struct fuse_conn_info *conn) {
     (void)userdata;
     (void)conn;
@@ -1873,10 +1774,6 @@ static const struct fuse_lowlevel_ops ramfs_oper = {
     .rmdir        = ramfs_ll_rmdir,
     .link         = ramfs_ll_link,
     .rename       = ramfs_ll_rename,
-    .getxattr     = ramfs_ll_getxattr,
-    .setxattr     = ramfs_ll_setxattr,
-    .removexattr  = ramfs_ll_removexattr,
-    .listxattr    = ramfs_ll_listxattr,
 };
 
 int main(int argc, char *argv[])
