@@ -92,7 +92,24 @@ struct ramfs_inode {
     
     /* Reference counting for hard links */
     int ref_count;                /* Reference count for cleanup */
+    
+    /* Hash table chain link */
+    struct ramfs_inode *hash_next; /* Next inode in hash bucket */
 };
+
+/* Inode hash table structure */
+struct inode_hash_table {
+    struct ramfs_inode **buckets; /* Array of hash bucket heads */
+    size_t size;                  /* Number of buckets */
+    size_t count;                 /* Number of inodes in table */
+    pthread_rwlock_t lock;        /* Hash table lock */
+};
+
+/* Hash table configuration */
+#define HASH_TABLE_INITIAL_SIZE 64
+#define HASH_TABLE_MAX_LOAD_FACTOR 0.75
+#define HASH_TABLE_MIN_LOAD_FACTOR 0.25
+#define HASH_TABLE_MIN_SIZE 32
 
 /* Global filesystem state */
 struct ramfs_state {
@@ -107,9 +124,7 @@ struct ramfs_state {
     pthread_mutex_t block_lock;   /* Block allocation lock */
     
     /* Inode hash table for fast lookup */
-    struct ramfs_inode **inode_table; /* Hash table of inodes */
-    size_t inode_table_size;      /* Hash table size */
-    pthread_rwlock_t inode_table_lock; /* Hash table lock */
+    struct inode_hash_table *inode_table; /* Hash table of inodes */
 };
 
 /* Global filesystem instance */
@@ -127,6 +142,15 @@ static void ramfs_inode_destroy(struct ramfs_inode *inode);
 static struct ramfs_inode *ramfs_inode_get(fuse_ino_t ino);
 static int ramfs_inode_add(struct ramfs_inode *inode);
 static void ramfs_inode_remove(fuse_ino_t ino);
+
+/* Hash table management functions */
+static struct inode_hash_table *inode_hash_table_create(size_t initial_size);
+static void inode_hash_table_destroy(struct inode_hash_table *table);
+static int inode_hash_table_insert(struct inode_hash_table *table, struct ramfs_inode *inode);
+static struct ramfs_inode *inode_hash_table_lookup(struct inode_hash_table *table, fuse_ino_t ino);
+static int inode_hash_table_remove(struct inode_hash_table *table, fuse_ino_t ino);
+static int inode_hash_table_resize(struct inode_hash_table *table, size_t new_size);
+static size_t inode_hash_function(fuse_ino_t ino, size_t table_size);
 
 static struct ramfs_block *ramfs_block_alloc(void);
 static void ramfs_block_free(struct ramfs_block *block);
@@ -345,8 +369,7 @@ static int ramfs_init_state(void) {
     
     /* Initialize locks */
     if (pthread_mutex_init(&ramfs_state->ino_lock, NULL) != 0 ||
-        pthread_mutex_init(&ramfs_state->block_lock, NULL) != 0 ||
-        pthread_rwlock_init(&ramfs_state->inode_table_lock, NULL) != 0) {
+        pthread_mutex_init(&ramfs_state->block_lock, NULL) != 0) {
         free(ramfs_state);
         return -1;
     }
@@ -356,12 +379,22 @@ static int ramfs_init_state(void) {
     ramfs_state->free_blocks = NULL;
     ramfs_state->free_block_count = 0;
     ramfs_state->total_blocks = 0;
-    ramfs_state->inode_table = NULL;
-    ramfs_state->inode_table_size = 1024; /* Initial size */
+    
+    /* Create hash table */
+    ramfs_state->inode_table = inode_hash_table_create(HASH_TABLE_INITIAL_SIZE);
+    if (!ramfs_state->inode_table) {
+        pthread_mutex_destroy(&ramfs_state->ino_lock);
+        pthread_mutex_destroy(&ramfs_state->block_lock);
+        free(ramfs_state);
+        return -1;
+    }
     
     /* Create root directory */
     ramfs_state->root = ramfs_inode_create(S_IFDIR | 0755, getuid(), getgid());
     if (!ramfs_state->root) {
+        inode_hash_table_destroy(ramfs_state->inode_table);
+        pthread_mutex_destroy(&ramfs_state->ino_lock);
+        pthread_mutex_destroy(&ramfs_state->block_lock);
         free(ramfs_state);
         return -1;
     }
@@ -484,6 +517,7 @@ static struct ramfs_inode *ramfs_inode_create(mode_t mode, uid_t uid, gid_t gid)
     }
     
     inode->ref_count = 1;
+    inode->hash_next = NULL;
     
     /* Initialize type-specific data */
     if (S_ISDIR(mode)) {
@@ -543,54 +577,195 @@ static void ramfs_inode_destroy(struct ramfs_inode *inode) {
 }
 
 /* Hash function for inode table */
-static size_t inode_hash(fuse_ino_t ino) {
-    return ino % ramfs_state->inode_table_size;
+static size_t inode_hash_function(fuse_ino_t ino, size_t table_size) {
+    /* Use a simple but effective hash function for inode numbers */
+    uint64_t hash = ino;
+    hash ^= hash >> 16;
+    hash *= 0x85ebca6b;
+    hash ^= hash >> 13;
+    hash *= 0xc2b2ae35;
+    hash ^= hash >> 16;
+    return hash % table_size;
+}
+
+/* Create a new hash table */
+static struct inode_hash_table *inode_hash_table_create(size_t initial_size) {
+    struct inode_hash_table *table = malloc(sizeof(struct inode_hash_table));
+    if (!table) return NULL;
+    
+    table->buckets = calloc(initial_size, sizeof(struct ramfs_inode*));
+    if (!table->buckets) {
+        free(table);
+        return NULL;
+    }
+    
+    table->size = initial_size;
+    table->count = 0;
+    
+    if (pthread_rwlock_init(&table->lock, NULL) != 0) {
+        free(table->buckets);
+        free(table);
+        return NULL;
+    }
+    
+    return table;
+}
+
+/* Destroy a hash table */
+static void inode_hash_table_destroy(struct inode_hash_table *table) {
+    if (!table) return;
+    
+    pthread_rwlock_wrlock(&table->lock);
+    
+    /* Free all remaining inodes */
+    for (size_t i = 0; i < table->size; i++) {
+        struct ramfs_inode *current = table->buckets[i];
+        while (current) {
+            struct ramfs_inode *next = current->hash_next;
+            /* Note: We don't destroy inodes here as they should be cleaned up elsewhere */
+            current = next;
+        }
+    }
+    
+    free(table->buckets);
+    pthread_rwlock_unlock(&table->lock);
+    pthread_rwlock_destroy(&table->lock);
+    free(table);
+}
+
+/* Resize hash table */
+static int inode_hash_table_resize(struct inode_hash_table *table, size_t new_size) {
+    if (!table || new_size < HASH_TABLE_MIN_SIZE) return -1;
+    
+    /* Allocate new bucket array */
+    struct ramfs_inode **new_buckets = calloc(new_size, sizeof(struct ramfs_inode*));
+    if (!new_buckets) return -1;
+    
+    /* Save old data */
+    struct ramfs_inode **old_buckets = table->buckets;
+    size_t old_size = table->size;
+    
+    /* Update table */
+    table->buckets = new_buckets;
+    table->size = new_size;
+    
+    /* Rehash all existing inodes */
+    for (size_t i = 0; i < old_size; i++) {
+        struct ramfs_inode *current = old_buckets[i];
+        while (current) {
+            struct ramfs_inode *next = current->hash_next;
+            
+            /* Rehash and insert into new table */
+            size_t bucket = inode_hash_function(current->ino, new_size);
+            current->hash_next = new_buckets[bucket];
+            new_buckets[bucket] = current;
+            
+            current = next;
+        }
+    }
+    
+    free(old_buckets);
+    return 0;
+}
+
+/* Insert inode into hash table */
+static int inode_hash_table_insert(struct inode_hash_table *table, struct ramfs_inode *inode) {
+    if (!table || !inode) return -1;
+    
+    pthread_rwlock_wrlock(&table->lock);
+    
+    /* Check if resize is needed */
+    double load_factor = (double)(table->count + 1) / table->size;
+    if (load_factor > HASH_TABLE_MAX_LOAD_FACTOR) {
+        size_t new_size = table->size * 2;
+        if (inode_hash_table_resize(table, new_size) != 0) {
+            pthread_rwlock_unlock(&table->lock);
+            return -1;
+        }
+    }
+    
+    /* Insert into appropriate bucket */
+    size_t bucket = inode_hash_function(inode->ino, table->size);
+    inode->hash_next = table->buckets[bucket];
+    table->buckets[bucket] = inode;
+    table->count++;
+    
+    pthread_rwlock_unlock(&table->lock);
+    return 0;
+}
+
+/* Lookup inode in hash table */
+static struct ramfs_inode *inode_hash_table_lookup(struct inode_hash_table *table, fuse_ino_t ino) {
+    if (!table) return NULL;
+    
+    pthread_rwlock_rdlock(&table->lock);
+    
+    size_t bucket = inode_hash_function(ino, table->size);
+    struct ramfs_inode *current = table->buckets[bucket];
+    
+    while (current) {
+        if (current->ino == ino) {
+            pthread_rwlock_unlock(&table->lock);
+            return current;
+        }
+        current = current->hash_next;
+    }
+    
+    pthread_rwlock_unlock(&table->lock);
+    return NULL;
+}
+
+/* Remove inode from hash table */
+static int inode_hash_table_remove(struct inode_hash_table *table, fuse_ino_t ino) {
+    if (!table) return -1;
+    
+    pthread_rwlock_wrlock(&table->lock);
+    
+    size_t bucket = inode_hash_function(ino, table->size);
+    struct ramfs_inode **current = &table->buckets[bucket];
+    
+    while (*current) {
+        if ((*current)->ino == ino) {
+            struct ramfs_inode *to_remove = *current;
+            *current = (*current)->hash_next;
+            to_remove->hash_next = NULL;
+            table->count--;
+            
+            /* Check if resize down is needed */
+            if (table->size > HASH_TABLE_MIN_SIZE) {
+                double load_factor = (double)table->count / table->size;
+                if (load_factor < HASH_TABLE_MIN_LOAD_FACTOR) {
+                    size_t new_size = table->size / 2;
+                    if (new_size >= HASH_TABLE_MIN_SIZE) {
+                        inode_hash_table_resize(table, new_size);
+                    }
+                }
+            }
+            
+            pthread_rwlock_unlock(&table->lock);
+            return 0;
+        }
+        current = &(*current)->hash_next;
+    }
+    
+    pthread_rwlock_unlock(&table->lock);
+    return -1; /* Not found */
 }
 
 /* Add inode to hash table */
 static int ramfs_inode_add(struct ramfs_inode *inode) {
     if (!ramfs_state->inode_table) {
-        /* Initialize hash table */
-        ramfs_state->inode_table = calloc(ramfs_state->inode_table_size, 
-                                         sizeof(struct ramfs_inode*));
-        if (!ramfs_state->inode_table) {
-            return -1;
-        }
+        return -1;
     }
     
-    pthread_rwlock_wrlock(&ramfs_state->inode_table_lock);
-    
-    size_t hash_idx = inode_hash(inode->ino);
-    
-    /* Simple linear probing for collision resolution */
-    while (ramfs_state->inode_table[hash_idx] != NULL) {
-        hash_idx = (hash_idx + 1) % ramfs_state->inode_table_size;
-    }
-    
-    ramfs_state->inode_table[hash_idx] = inode;
-    pthread_rwlock_unlock(&ramfs_state->inode_table_lock);
-    
-    return 0;
+    return inode_hash_table_insert(ramfs_state->inode_table, inode);
 }
 
 /* Remove inode from hash table */
 static void ramfs_inode_remove(fuse_ino_t ino) {
     if (!ramfs_state->inode_table) return;
     
-    pthread_rwlock_wrlock(&ramfs_state->inode_table_lock);
-    
-    size_t hash_idx = inode_hash(ino);
-    
-    /* Linear probing to find the inode */
-    while (ramfs_state->inode_table[hash_idx] != NULL) {
-        if (ramfs_state->inode_table[hash_idx]->ino == ino) {
-            ramfs_state->inode_table[hash_idx] = NULL;
-            break;
-        }
-        hash_idx = (hash_idx + 1) % ramfs_state->inode_table_size;
-    }
-    
-    pthread_rwlock_unlock(&ramfs_state->inode_table_lock);
+    inode_hash_table_remove(ramfs_state->inode_table, ino);
 }
 
 /* Inode lookup with hash table */
@@ -601,22 +776,7 @@ static struct ramfs_inode *ramfs_inode_get(fuse_ino_t ino) {
     
     if (!ramfs_state->inode_table) return NULL;
     
-    pthread_rwlock_rdlock(&ramfs_state->inode_table_lock);
-    
-    size_t hash_idx = inode_hash(ino);
-    struct ramfs_inode *result = NULL;
-    
-    /* Linear probing to find the inode */
-    while (ramfs_state->inode_table[hash_idx] != NULL) {
-        if (ramfs_state->inode_table[hash_idx]->ino == ino) {
-            result = ramfs_state->inode_table[hash_idx];
-            break;
-        }
-        hash_idx = (hash_idx + 1) % ramfs_state->inode_table_size;
-    }
-    
-    pthread_rwlock_unlock(&ramfs_state->inode_table_lock);
-    return result;
+    return inode_hash_table_lookup(ramfs_state->inode_table, ino);
 }
 
 /* FUSE operations */

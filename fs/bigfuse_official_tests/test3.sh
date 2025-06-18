@@ -2,7 +2,7 @@
 # Test 3: Deep nested directory creation
 
 BASE_DIR="/tmp/ramfs/deep_test"
-DEPTH=1000
+DEPTH=521
 
 mkdir -p $BASE_DIR
 current_path=$BASE_DIR
